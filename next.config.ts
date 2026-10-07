@@ -1,17 +1,17 @@
-import type { NextConfig } from "next";
+import type {NextConfig} from 'next';
 
 const nextConfig: NextConfig = {
-  /* config options here */
-  cacheComponents: true,
-  partialPrefetching: true,
-  turbopack: {
-    rules: {
-      "*.css": {
-        loaders: ["@tailwindcss/turbopack"],
-        as: "*.css",
-      },
-    },
-  },
+	// Nearly every page is per-user, so pages render at request time (Cache Components off).
+	turbopack: {
+		rules: {
+			'*.css': {
+				loaders: ['@tailwindcss/turbopack'],
+				as: '*.css',
+			},
+		},
+	},
+	// Rendering/bundling packages run in the worker; keep them out of the server bundle.
+	serverExternalPackages: ['@remotion/bundler', '@remotion/renderer', '@libsql/client'],
 };
 
 export default nextConfig;

@@ -39,3 +39,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+/data
+/storage
+/drizzle/meta/_journal.json.bak
+!.env.example
+
+# render scratch
+/out
