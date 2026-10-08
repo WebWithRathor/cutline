@@ -1,6 +1,6 @@
 import {PRESET_META} from '@/remotion/captions/meta';
-import {BROLL_META, GRADES, SFX_META, VFX_META} from '@/remotion/fx/meta';
-import {BROLL_SOURCES, GRADE_IDS, SFX_IDS, VFX_TYPES, type BrollSource, type CreativeBrief, type GradeId, type SfxId, type VfxType, type Word} from '@/remotion/types';
+import {BROLL_META, BROLL_MODE_META, GRADES, SFX_META, VFX_META, type BrollMode} from '@/remotion/fx/meta';
+import {GRADE_IDS, SFX_IDS, VFX_TYPES, type BrollSource, type CreativeBrief, type GradeId, type SfxId, type VfxType, type Word} from '@/remotion/types';
 import {Gemini, S} from './gemini';
 
 // Gemini watches the raw video (picture and sound) and writes the creative brief Claude edits from.
@@ -41,11 +41,12 @@ export async function analyzeCreative(opts: {
 	words: Word[];
 	variantName: string;
 	guidance: string;
-	higgsfield: boolean;
+	brollMode: BrollMode;
 	captioned: boolean;
+	report: (msg: string) => void;
 }): Promise<CreativeBrief> {
 	const g = new Gemini(opts.apiKey);
-	const sources = BROLL_SOURCES.filter((s) => s !== 'higgsfield' || opts.higgsfield);
+	const sources = BROLL_MODE_META[opts.brollMode].sources;
 	const schema = S.obj({
 		summary: S.str('One or two sentences: what the video is about.'),
 		theme: S.str('The theme / niche, a few words.'),
@@ -57,11 +58,16 @@ export async function analyzeCreative(opts: {
 		captionWhy: S.str('Why that caption style, one sentence.'),
 		grade: S.str('The colour grade that suits it.', GRADE_IDS),
 		gradeWhy: S.str('Why that grade, one sentence, mention the footage lighting.'),
-		vfx: S.arr(S.obj({type: S.str(undefined, VFX_TYPES), when: S.str('exact spoken words, 2-6 words')}), '0-8 visual effects.'),
-		sfx: S.arr(S.obj({sound: S.str(undefined, SFX_IDS), when: S.str('exact spoken words, 2-6 words')}), '0-12 sound effects.'),
+		vfx: S.arr(S.obj({type: S.str(undefined, VFX_TYPES), when: S.str('exact spoken words, 2-6 words')}), '0-8 visual effects from the library that fit this video and its mood.'),
+		sfx: S.arr(S.obj({sound: S.str(undefined, SFX_IDS), when: S.str('exact spoken words, 2-6 words')}), '0-12 sound effects from the library that fit this video and its mood.'),
 		broll: S.arr(
-			S.obj({when: S.str('exact spoken words where it starts, 2-6 words'), idea: S.str('What the viewer sees, concrete.'), source: S.str('Best way to make it.', sources), why: S.str('one short sentence')}),
-			'B-roll cutaways that illustrate what is said: 0-6, roughly one per 10-15 seconds where it helps.',
+			S.obj({
+				when: S.str('exact spoken words where it starts, 2-6 words'),
+				idea: S.str(opts.brollMode === 'higgsfield' ? 'The shot to generate: subject, action, setting, camera, light.' : 'What the viewer sees, concrete.'),
+				source: S.str('Best way to make it.', sources.length ? sources : ['remotion']),
+				why: S.str('one short sentence'),
+			}),
+			opts.brollMode === 'none' ? 'Always empty: this video has no B-roll.' : 'B-roll cutaways that illustrate what is said: 0-6, roughly one per 10-15 seconds where it helps.',
 		),
 		notes: S.str('Anything else the editor should know: hook, what to cut, tone to keep. Two or three sentences.'),
 	});
@@ -81,15 +87,18 @@ ${list(VFX_META)}
 Sound effects:
 ${list(SFX_META)}
 
-B-roll sources:
+B-roll: the creator chose "${BROLL_MODE_META[opts.brollMode].name}". ${BROLL_MODE_META[opts.brollMode].description}
 ${sources.map((s) => `- ${s}: ${BROLL_META[s].description} Cost: ${BROLL_META[s].cost}.`).join('\n')}
+${opts.brollMode === 'higgsfield' ? 'Suggest real-world footage ideas that AI video can generate well (places, objects, people doing things, nature, cities); no on-screen text.' : opts.brollMode === 'motion' ? 'Suggest motion-graphics ideas: titles, big numbers, lists, quotes (remotion) or custom animated diagrams, processes and comparisons (hyperframes).' : ''}
 ${opts.captioned ? '' : '\nThis video type draws its own captions and cartoon cutaways: still pick a caption style, but suggest B-roll only where a real-world shot would help, and keep effects gentle.'}
 Transcript with timestamps:
 ${timedLines(opts.words)}`;
 
-	const file = await g.upload(opts.video, opts.mimeType, 'cutline-analysis');
+	opts.report(`Uploading the video to Gemini (${(opts.video.length / 1e6).toFixed(1)} MB)`);
+	const file = await g.upload(opts.video, opts.mimeType, 'cutline-analysis', (sec) => opts.report(`Gemini is processing the video (${sec} s)`));
 	try {
 		const model = await g.model('pro');
+		opts.report(`${model} is watching the video with the transcript`);
 		const raw = await g.json<Record<string, unknown>>({
 			model,
 			system: SYSTEM,
@@ -98,7 +107,7 @@ ${timedLines(opts.words)}`;
 			maxTokens: 12000,
 			lowMediaRes: opts.durationSec > 300,
 		});
-		return sanitizeCreative(raw, {higgsfield: opts.higgsfield});
+		return sanitizeCreative(raw, {brollMode: opts.brollMode});
 	} finally {
 		await g.remove(file);
 	}
@@ -108,7 +117,8 @@ const str = (v: unknown, n: number) => String(v ?? '').trim().slice(0, n);
 const oneOf = <T extends string>(v: unknown, all: readonly T[], fallback: T): T => (all.includes(v as T) ? (v as T) : fallback);
 const arr = (v: unknown): Record<string, unknown>[] => (Array.isArray(v) ? v.filter((x) => x && typeof x === 'object') : []);
 
-export function sanitizeCreative(raw: Record<string, unknown>, opts: {higgsfield: boolean}): CreativeBrief {
+export function sanitizeCreative(raw: Record<string, unknown>, opts: {brollMode: BrollMode}): CreativeBrief {
+	const sources = BROLL_MODE_META[opts.brollMode].sources;
 	const palette = (Array.isArray(raw.palette) ? raw.palette : [])
 		.map((c) => String(c).trim())
 		.filter((c) => /^#[0-9a-f]{6}$/i.test(c))
@@ -133,11 +143,11 @@ export function sanitizeCreative(raw: Record<string, unknown>, opts: {higgsfield
 			.slice(0, 16)
 			.map((v) => ({sound: v.sound as SfxId, when: str(v.when, 80)})),
 		broll: arr(raw.broll)
-			.filter((b) => str(b.idea, 300))
+			.filter((b) => sources.length && str(b.idea, 300))
 			.slice(0, 8)
 			.map((b) => {
-				const source = oneOf<BrollSource>(b.source, BROLL_SOURCES, 'remotion');
-				return {when: str(b.when, 80), idea: str(b.idea, 300), source: source === 'higgsfield' && !opts.higgsfield ? 'hyperframes' : source, why: str(b.why, 200)};
+				const source = oneOf<BrollSource>(b.source, sources, sources[0]);
+				return {when: str(b.when, 80), idea: str(b.idea, 300), source, why: str(b.why, 200)};
 			}),
 		notes: str(raw.notes, 600),
 	};

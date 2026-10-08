@@ -10,10 +10,12 @@ import {requireUser} from '@/lib/auth';
 import {db, schema} from '@/lib/db';
 import {listKeys} from '@/lib/keys';
 import {getOwnedProject} from '@/lib/projects';
+import {track} from '@/server/activity';
 import {analyzeProject} from '@/server/pipeline/analyze';
 import {startRender} from '@/server/render';
 import {removePrefix} from '@/server/storage';
 import {PRESET_META as PRESETS} from '@/remotion/captions/meta';
+import {BROLL_MODE_META, brollModeOf} from '@/remotion/fx/meta';
 import {BROLL_SOURCES, GRADE_IDS} from '@/remotion/types';
 import {getVariant} from '@/variants';
 
@@ -55,6 +57,9 @@ export async function createProject(input: z.input<typeof CreateSchema>): Promis
 	if (!keys.has('anthropic') || !keys.has('gemini')) {
 		return {error: 'Add a Gemini key and an Anthropic key in API keys first.'};
 	}
+	if (variant.renderer === 'captioned' && parsed.data.brief.broll === 'higgsfield' && !keys.has('higgsfield')) {
+		return {error: 'Higgsfield B-roll needs a Higgsfield key. Add it in API keys, or pick Remotion + HyperFrames.'};
+	}
 	const id = randomUUID();
 	await db.insert(schema.project).values({
 		id,
@@ -86,7 +91,9 @@ export async function restyleProject(id: string, style: z.input<typeof StyleSche
 }
 
 async function startOrFail(id: string): Promise<{error?: string}> {
+	const t = track(id);
 	try {
+		await t.pending(['broll', 'render']);
 		await startRender(id);
 	} catch (e) {
 		console.error('start render', e);
@@ -104,6 +111,7 @@ export async function approvePlan(id: string): Promise<{error?: string}> {
 	const p = await getOwnedProject(user.id, id);
 	if (!p) return {error: 'Project not found.'};
 	if (p.status !== 'review' || !p.plan) return {error: 'There is no storyboard waiting for approval.'};
+	await track(id).done('storyboard', 'Approved by you');
 	return startOrFail(id);
 }
 
@@ -129,6 +137,8 @@ export async function editStoryboard(id: string, edit: z.input<typeof Storyboard
 		const cue = plan.broll?.find((b) => b.id === e.cueId);
 		if (!cue) return {error: 'That B-roll clip no longer exists.'};
 		if (e.source === 'higgsfield' && !(await listKeys(user.id)).some((k) => k.provider === 'higgsfield')) return {error: 'Add a Higgsfield key in API keys to use AI footage.'};
+		const mode = brollModeOf(p.brief.broll);
+		if (!BROLL_MODE_META[mode].sources.includes(e.source)) return {error: `This video uses ${BROLL_MODE_META[mode].name} B-roll.`};
 		plan.broll = plan.broll!.map((b) =>
 			b.id === e.cueId
 				? {...b, source: e.source, layout: e.source === 'remotion' ? b.layout : 'full', prompt: b.prompt ?? [b.card.title, b.card.sub].filter(Boolean).join(': '), assetKey: undefined, error: undefined}
@@ -152,6 +162,7 @@ export async function replanProject(id: string, notes: string): Promise<{error?:
 	const clean = notes.trim().slice(0, 2000);
 	if (!clean) return {error: 'Write what you want changed.'};
 	await db.update(schema.project).set({status: 'planning', progress: 0.28, error: null}).where(eq(schema.project.id, id));
+	await track(id).log('plan', `Your notes: ${clean.slice(0, 200)}`);
 	after(() => analyzeProject(id, {notes: clean}));
 	revalidatePath(`/projects/${id}`);
 	return {};

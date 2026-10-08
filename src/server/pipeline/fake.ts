@@ -38,8 +38,8 @@ export function fakeCreative(): CreativeBrief {
 		captionWhy: 'High-contrast chips stay readable on any background.',
 		grade: 'punchy',
 		gradeWhy: 'Flat indoor light needs contrast and colour.',
-		vfx: [{type: 'flash', when: 'what if every'}, {type: 'shake', when: 'exactly what we'}],
-		sfx: [{sound: 'whoosh', when: 'what if every'}, {sound: 'pop', when: 'popped on screen'}, {sound: 'ding', when: 'in minutes'}],
+		vfx: [{type: 'rgb-split', when: 'what if every'}, {type: 'film-burn', when: 'exactly what we'}],
+		sfx: [{sound: 'boom', when: 'hours on captions'}, {sound: 'pop', when: 'popped on screen'}, {sound: 'cash', when: 'in minutes'}],
 		broll: [
 			{when: 'hours on captions', idea: 'Big number: 4 hours lost per video', source: 'remotion', why: 'Makes the pain concrete'},
 			{when: 'Upload a clip', idea: 'Three steps ticking in: upload, pick, done', source: 'hyperframes', why: 'Shows how simple it is'},
@@ -48,7 +48,7 @@ export function fakeCreative(): CreativeBrief {
 	};
 }
 
-export function fakePlan(words: Word[], brollMode: BrollMode = 'auto'): EditPlan & {captionPreset?: string} {
+export function fakePlan(words: Word[], brollMode: BrollMode = 'motion'): EditPlan & {captionPreset?: string} {
 	const keywords = words.map((w, i) => (/^(hard|hours|every|popped|building|minutes)/i.test(w.text) ? i : -1)).filter((i) => i >= 0);
 	const zooms = keywords.filter((_, k) => k % 2 === 0).map((at) => ({at, words: 3}));
 	const find = (re: RegExp, fallback: number) => {
@@ -60,8 +60,8 @@ export function fakePlan(words: Word[], brollMode: BrollMode = 'auto'): EditPlan
 	const look = sanitizeLook(
 		{
 			grade: 'punchy',
-			vfx: [{type: 'flash', at: find(/^what$/i, 0.4)}, {type: 'shake', at: find(/^exactly/i, 0.8)}],
-			sfx: [{sound: 'whoosh', at: hours}, {sound: 'pop', at: find(/^popped/i, 0.5)}, {sound: 'whoosh', at: upload}, {sound: 'ding', at: find(/^minutes/i, 0.9)}],
+			vfx: [{type: 'focus-pull', at: 0}, {type: 'rgb-split', at: find(/^what$/i, 0.4)}, {type: 'film-burn', at: find(/^exactly/i, 0.8)}],
+			sfx: [{sound: 'boom', at: hours}, {sound: 'pop', at: find(/^popped/i, 0.5)}, {sound: 'reverse-whoosh', at: upload}, {sound: 'cash', at: find(/^minutes/i, 0.9)}],
 			broll: [
 				{at: hours, until: hours + 4, source: 'remotion', layout: 'full', card: {type: 'number', title: '4 hours', sub: 'lost on captions, every video'}, why: 'Makes the pain concrete'},
 				{
@@ -77,7 +77,7 @@ export function fakePlan(words: Word[], brollMode: BrollMode = 'auto'): EditPlan
 		},
 		words,
 		new Set(),
-		{brollMode, higgsfield: false},
+		{brollMode},
 	);
 	return {...toPlan({remove: [], keywords, zooms, hook: 'Captions in one click'}, words, 500), ...look, captionPreset: 'pill-chip'};
 }

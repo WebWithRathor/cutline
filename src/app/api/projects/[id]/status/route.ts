@@ -12,5 +12,5 @@ export async function GET(_request: Request, ctx: RouteContext<'/api/projects/[i
 		await pollRender(p).catch((e) => console.error('poll render', e));
 		p = (await getOwnedProject(session.user.id, id)) ?? p;
 	}
-	return Response.json({status: p.status, progress: p.progress, error: p.error, hasOutput: Boolean(p.outputKey)});
+	return Response.json({status: p.status, progress: p.progress, error: p.error, hasOutput: Boolean(p.outputKey), activity: p.activity ?? null});
 }

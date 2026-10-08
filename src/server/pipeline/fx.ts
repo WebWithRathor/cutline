@@ -1,7 +1,6 @@
 import {PRESET_META} from '@/remotion/captions/meta';
-import {BROLL_META, CARD_META, GRADES, SFX_META, VFX_META} from '@/remotion/fx/meta';
+import {BROLL_META, BROLL_MODE_META, CARD_META, GRADES, SFX_META, VFX_META, type BrollMode} from '@/remotion/fx/meta';
 import {
-	BROLL_SOURCES,
 	CARD_TYPES,
 	GRADE_IDS,
 	SFX_IDS,
@@ -21,7 +20,10 @@ import {
 // Tool-schema pieces and validation for the look-and-feel part of Claude's plan (grade, VFX, SFX, B-roll).
 // Plans are data: everything is clamped to known ids and valid word indices before it reaches a render.
 
-export type BrollMode = 'auto' | 'remotion' | 'none';
+export type {BrollMode};
+
+// What Claude may pick in each mode. In Higgsfield mode every clip is AI footage; its card is only the fallback.
+export const plannerSources = (mode: BrollMode): BrollSource[] => (mode === 'higgsfield' ? ['higgsfield'] : BROLL_MODE_META[mode].sources);
 
 const idx = (d: string) => ({type: 'integer', description: d});
 
@@ -111,7 +113,7 @@ export function sanitizeLook(
 	raw: {grade?: unknown; vfx?: unknown; sfx?: unknown; broll?: unknown},
 	words: Word[],
 	removed: Set<number>,
-	opts: {brollMode: BrollMode; higgsfield: boolean; fallbackGrade?: GradeId},
+	opts: {brollMode: BrollMode; fallbackGrade?: GradeId},
 ): {grade: GradeId; vfx: VfxCue[]; sfx: SfxCue[]; broll: BrollCue[]} {
 	const n = words.length;
 	const grade = GRADE_IDS.includes(raw.grade as GradeId) ? (raw.grade as GradeId) : (opts.fallbackGrade ?? 'natural');
@@ -153,11 +155,9 @@ export function sanitizeLook(
 			const type: CardType = CARD_TYPES.includes(c.type as CardType) ? (c.type as CardType) : 'title';
 			const title = short(c.title, type === 'quote' ? 14 : 6, 90) || short(b.why, 6, 60) || 'Key idea';
 			const items = Array.isArray(c.items) ? c.items.map((it) => short(it, 4, 32)).filter(Boolean).slice(0, 4) : undefined;
-			let source: BrollSource = BROLL_SOURCES.includes(b.source as BrollSource) ? (b.source as BrollSource) : 'remotion';
-			if (source === 'higgsfield' && !opts.higgsfield) source = 'hyperframes';
-			if (opts.brollMode === 'remotion') source = 'remotion';
-			const prompt = String(b.prompt ?? '').trim().slice(0, 1200) || undefined;
-			if (source !== 'remotion' && !prompt) source = 'remotion';
+			const allowed = plannerSources(opts.brollMode);
+			const source: BrollSource = allowed.includes(b.source as BrollSource) ? (b.source as BrollSource) : allowed[0];
+			const prompt = String(b.prompt ?? '').trim().slice(0, 1200) || [c.title, c.sub].filter(Boolean).join(': ').slice(0, 300) || undefined;
 			broll.push({
 				id: `b${broll.length + 1}`,
 				atWord: at,

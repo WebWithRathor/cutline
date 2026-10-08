@@ -1,8 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import {PRESET_META} from '@/remotion/captions/meta';
 import type {CreativeBrief, EditPlan, KeepRange, RemovedRange, Word} from '@/remotion/types';
-import {BROLL_SOURCES} from '@/remotion/types';
-import {CAPTION_SCHEMA, GRADE_SCHEMA, SFX_SCHEMA, VFX_SCHEMA, brollSchema, creativeText, lookGuide, sanitizeLook, type BrollMode} from './fx';
+import type {BrollSource} from '@/remotion/types';
+import {CAPTION_SCHEMA, GRADE_SCHEMA, SFX_SCHEMA, VFX_SCHEMA, brollSchema, creativeText, lookGuide, plannerSources, sanitizeLook, type BrollMode} from './fx';
 import {ProviderError} from './errors';
 
 export const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5';
@@ -40,8 +40,7 @@ export const REMOVE_SCHEMA = {
 	},
 } as const;
 
-function tool(higgsfield: boolean): Anthropic.Tool {
-	const sources = BROLL_SOURCES.filter((x) => x !== 'higgsfield' || higgsfield);
+function tool(sources: BrollSource[]): Anthropic.Tool {
 	return {
 		name: 'submit_edit_plan',
 		description: 'Submit the edit plan for this video. Word references are indices into the numbered transcript.',
@@ -60,7 +59,7 @@ function tool(higgsfield: boolean): Anthropic.Tool {
 				grade: GRADE_SCHEMA,
 				vfx: VFX_SCHEMA,
 				sfx: SFX_SCHEMA,
-				broll: brollSchema(sources),
+				broll: brollSchema(sources.length ? sources : ['remotion']),
 			},
 			required: ['remove', 'keywords', 'zooms', 'hook', 'captionPreset', 'grade', 'vfx', 'sfx', 'broll'],
 		},
@@ -103,25 +102,26 @@ export async function planEdit(opts: {
 	creative?: CreativeBrief | null;
 	previous?: EditPlan | null;
 	brollMode: BrollMode;
-	higgsfield: boolean;
+	onRequest?: (model: string) => void;
 }): Promise<EditPlan & {captionPreset?: string}> {
 	if (!opts.words.length) return {keepRanges: [], keywords: [], zooms: []};
-	const sources = BROLL_SOURCES.filter((x) => x !== 'higgsfield' || opts.higgsfield);
+	const sources = plannerSources(opts.brollMode);
 	const brollRule =
 		opts.brollMode === 'none'
 			? 'The creator does not want B-roll: return an empty broll list.'
-			: opts.brollMode === 'remotion'
-				? 'Use only built-in Remotion cards for B-roll (source "remotion").'
-				: 'Use the source the brief suggests for each B-roll idea unless another clearly fits better. Higgsfield costs the creator credits: use it only for real-world footage that a card cannot show.';
+			: opts.brollMode === 'higgsfield'
+				? 'The creator chose Higgsfield for B-roll: every clip is AI-generated real-world footage (source "higgsfield"). Write a vivid cinematic prompt for each, and still fill in its card (it is the fallback if generation fails). Each clip costs credits, so choose the moments where footage really helps.'
+				: 'The creator chose motion graphics for B-roll: use "remotion" cards for simple titles, numbers, lists and quotes, and "hyperframes" for custom animations (diagrams, processes, comparisons, animated icons) with a clear prompt describing the animation.';
 	const previous =
 		opts.notes && opts.previous
 			? `\n\nYour previous plan (JSON):\n${JSON.stringify({removed: opts.previous.removed, grade: opts.previous.grade, vfx: opts.previous.vfx, sfx: opts.previous.sfx, broll: opts.previous.broll?.map((b) => ({...b, assetKey: undefined, error: undefined}))})}\n\nThe creator's notes on it (follow them):\n${opts.notes}`
 			: opts.notes
 				? `\n\nNotes from the creator on the previous plan:\n${opts.notes}`
 				: '';
+	opts.onRequest?.(MODEL);
 	const raw = await callPlanner<RawPlan>({
 		apiKey: opts.apiKey,
-		tool: tool(opts.higgsfield),
+		tool: tool(sources),
 		maxTokens: 8000,
 		system:
 			'You are a senior short-form video editor. You plan edits for talking-head videos from a word-level transcript and a creative brief written by a director who watched the footage. ' +
@@ -134,7 +134,7 @@ export async function planEdit(opts: {
 	});
 	const plan = toPlan(raw, opts.words, SILENCE_MS[opts.pacing] ?? SILENCE_MS.tight);
 	const removed = new Set(plan.removed?.flatMap((r) => Array.from({length: r.to - r.from + 1}, (_, k) => r.from + k)) ?? []);
-	const look = sanitizeLook(raw, opts.words, removed, {brollMode: opts.brollMode, higgsfield: opts.higgsfield, fallbackGrade: opts.creative?.grade});
+	const look = sanitizeLook(raw, opts.words, removed, {brollMode: opts.brollMode, fallbackGrade: opts.creative?.grade});
 	const captionPreset = PRESET_META.some((p) => p.id === raw.captionPreset) ? raw.captionPreset : opts.creative?.captionPresetId;
 	return {...plan, ...look, captionPreset};
 }

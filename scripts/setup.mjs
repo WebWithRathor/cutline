@@ -62,6 +62,19 @@ async function main() {
 			.map((m) => [m[1], m[2].replace(/\s+#.*$/, '')]),
 	);
 	execSync('npx drizzle-kit migrate', {stdio: 'inherit', env: {...process.env, ...vars}});
+	// Whisper (transcription) and FFmpeg run on this computer
+	const has = (cmd) => {
+		try {
+			execSync(`command -v ${cmd}`, {stdio: 'ignore'});
+			return true;
+		} catch {
+			return false;
+		}
+	};
+	const whisper = ['whisper-cli', 'whisper-cpp'].some(has);
+	if (!whisper || !has('ffmpeg')) {
+		console.log(`\n! Install ${[!whisper && 'Whisper', !has('ffmpeg') && 'FFmpeg'].filter(Boolean).join(' and ')} first:  brew install ${[!whisper && 'whisper-cpp', !has('ffmpeg') && 'ffmpeg'].filter(Boolean).join(' ')}`);
+	} else console.log('\n✓ Whisper and FFmpeg found. The Whisper model downloads on your first video (about 1.6 GB, once).');
 	console.log('\n✓ Done. Start everything with:  npm run local\n  Then open http://localhost:3000\n');
 }
 

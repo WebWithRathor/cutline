@@ -68,30 +68,79 @@ function active(vfx: ResolvedLook['vfx'], t: number) {
 		.filter((v) => v.u >= 0 && v.u <= 1);
 }
 
-// Transform for the footage layer: shake, punch zoom, whip and glitch jitter.
-export function vfxTransform(vfx: ResolvedLook['vfx'], t: number, width: number): {transform?: string; filter?: string} {
+const clamp = {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'} as const;
+
+// Transform and filters for the footage layer: shake, zooms, whip, swipe, spin, focus pull, flicker,
+// and the RGB channel split used by glitch / rgb-split / vhs.
+export function vfxTransform(vfx: ResolvedLook['vfx'], t: number, width: number): {transform?: string; filter?: string; rgb: number} {
 	let x = 0;
 	let y = 0;
 	let scale = 1;
+	let rotate = 0;
 	let blur = 0;
+	let bright = 1;
+	let rgb = 0;
 	for (const v of active(vfx, t)) {
+		const step = Math.round(t / 40);
 		if (v.type === 'shake') {
 			const amp = width * 0.018 * (1 - v.u);
 			x += (random(`sx${v.atMs}-${Math.round(t / 33)}`) - 0.5) * 2 * amp;
 			y += (random(`sy${v.atMs}-${Math.round(t / 33)}`) - 0.5) * 2 * amp;
 		} else if (v.type === 'punch-zoom') {
-			scale *= interpolate(v.u, [0, 0.09, 0.7, 1], [1, 1.22, 1.2, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
+			scale *= interpolate(v.u, [0, 0.09, 0.7, 1], [1, 1.22, 1.2, 1], clamp);
+		} else if (v.type === 'zoom-blur') {
+			scale *= interpolate(v.u, [0, 0.5, 1], [1, 1.45, 1], clamp);
+			blur = Math.max(blur, Math.sin(Math.PI * v.u) * width * 0.012);
+		} else if (v.type === 'slow-zoom') {
+			scale *= interpolate(v.u, [0, 0.85, 1], [1, 1.09, 1], clamp);
 		} else if (v.type === 'whip') {
 			x += interpolate(v.u, [0, 0.5, 0.5001, 1], [0, -0.35, 0.35, 0]) * width;
 			blur = Math.max(blur, Math.sin(Math.PI * v.u) * width * 0.03);
+		} else if (v.type === 'swipe') {
+			y += interpolate(v.u, [0, 0.5, 0.5001, 1], [0, -0.3, 0.3, 0]) * width * 1.7;
+			blur = Math.max(blur, Math.sin(Math.PI * v.u) * width * 0.025);
+		} else if (v.type === 'spin') {
+			rotate += interpolate(v.u, [0, 1], [0, 360], {...clamp, easing: (k) => k * k * (3 - 2 * k)});
+			scale *= 1 + 0.25 * Math.sin(Math.PI * v.u);
+			blur = Math.max(blur, Math.sin(Math.PI * v.u) * width * 0.012);
+		} else if (v.type === 'focus-pull') {
+			blur = Math.max(blur, interpolate(v.u, [0, 1], [width * 0.02, 0], clamp));
+		} else if (v.type === 'flicker') {
+			bright *= random(`fl${v.atMs}-${Math.round(t / 50)}`) > 0.5 ? 1 : 0.45 + 0.4 * v.u;
 		} else if (v.type === 'glitch') {
-			const step = Math.round(t / 40);
 			x += (random(`gx${v.atMs}-${step}`) - 0.5) * width * 0.04;
+			rgb = Math.max(rgb, width * 0.012 * (random(`gr${v.atMs}-${step}`) + 0.3));
+		} else if (v.type === 'rgb-split') {
+			rgb = Math.max(rgb, width * 0.02 * interpolate(v.u, [0, 0.12, 1], [0.3, 1, 0], clamp));
+			scale *= 1 + 0.04 * Math.sin(Math.PI * v.u);
+		} else if (v.type === 'vhs') {
+			rgb = Math.max(rgb, width * 0.005);
+			x += (random(`vx${v.atMs}-${Math.round(t / 80)}`) - 0.5) * width * 0.004;
 		}
 	}
-	if (!x && !y && scale === 1 && !blur) return {};
-	return {transform: `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) scale(${scale.toFixed(4)})`, filter: blur ? `blur(${blur.toFixed(1)}px)` : undefined};
+	const filters = [blur ? `blur(${blur.toFixed(1)}px)` : '', bright !== 1 ? `brightness(${bright.toFixed(2)})` : ''].filter(Boolean).join(' ');
+	const moved = x || y || scale !== 1 || rotate;
+	return {
+		transform: moved ? `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) scale(${scale.toFixed(4)}) rotate(${rotate.toFixed(2)}deg)` : undefined,
+		filter: filters || undefined,
+		rgb: Math.round(rgb * 10) / 10,
+	};
 }
+
+// SVG filter that offsets the red and blue channels by `dx` px (used as `filter: url(#id)`).
+export const RgbSplitFilter: React.FC<{id: string; dx: number}> = ({id, dx}) => (
+	<svg width={0} height={0} style={{position: 'absolute'}}>
+		<filter id={id} x="0" y="0" width="100%" height="100%" colorInterpolationFilters="sRGB">
+			<feColorMatrix in="SourceGraphic" type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" result="r" />
+			<feOffset in="r" dx={dx} dy={0} result="r2" />
+			<feColorMatrix in="SourceGraphic" type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0" result="g" />
+			<feColorMatrix in="SourceGraphic" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0" result="b" />
+			<feOffset in="b" dx={-dx} dy={0} result="b2" />
+			<feBlend in="r2" in2="g" mode="screen" result="rg" />
+			<feBlend in="rg" in2="b2" mode="screen" />
+		</filter>
+	</svg>
+);
 
 export const VfxOverlay: React.FC<{vfx: ResolvedLook['vfx']}> = ({vfx}) => {
 	const frame = useCurrentFrame();
@@ -102,27 +151,57 @@ export const VfxOverlay: React.FC<{vfx: ResolvedLook['vfx']}> = ({vfx}) => {
 	return (
 		<AbsoluteFill style={{pointerEvents: 'none'}}>
 			{on.map((v) => {
-				if (v.type === 'flash') return <AbsoluteFill key={v.atMs} style={{background: '#fff', opacity: interpolate(v.u, [0, 0.12, 1], [0.2, 0.95, 0])}} />;
+				const k = v.atMs;
+				if (v.type === 'flash') return <AbsoluteFill key={k} style={{background: '#fff', opacity: interpolate(v.u, [0, 0.12, 1], [0.2, 0.95, 0])}} />;
 				if (v.type === 'light-leak') {
 					const pos = interpolate(v.u, [0, 1], [-40, 140]);
-					const o = Math.sin(Math.PI * v.u) * 0.85;
 					return (
 						<AbsoluteFill
-							key={v.atMs}
+							key={k}
 							style={{
 								mixBlendMode: 'screen',
-								opacity: o,
+								opacity: Math.sin(Math.PI * v.u) * 0.85,
 								background: `radial-gradient(ellipse 60% 90% at ${pos}% 40%, rgba(255,170,80,0.95), rgba(255,80,60,0.55) 40%, transparent 70%)`,
 							}}
 						/>
 					);
 				}
+				if (v.type === 'film-burn') {
+					const grow = interpolate(v.u, [0, 0.45, 1], [10, 95, 140], clamp);
+					const o = interpolate(v.u, [0, 0.35, 0.6, 1], [0, 1, 0.9, 0], clamp);
+					return (
+						<AbsoluteFill key={k} style={{mixBlendMode: 'screen', opacity: o}}>
+							<AbsoluteFill style={{background: `radial-gradient(circle at 18% 78%, rgba(255,240,200,1) 0%, rgba(255,140,40,0.95) ${grow * 0.3}%, rgba(200,40,10,0.8) ${grow * 0.6}%, transparent ${grow}%)`}} />
+							<AbsoluteFill style={{background: `radial-gradient(circle at 85% 15%, rgba(255,200,120,0.9) 0%, rgba(255,90,20,0.7) ${grow * 0.35}%, transparent ${grow * 0.8}%)`}} />
+						</AbsoluteFill>
+					);
+				}
+				if (v.type === 'letterbox') {
+					const bar = height * 0.11 * interpolate(v.u, [0, 0.12, 0.88, 1], [0, 1, 1, 0], clamp);
+					return (
+						<AbsoluteFill key={k}>
+							<div style={{position: 'absolute', left: 0, right: 0, top: 0, height: bar, background: '#000'}} />
+							<div style={{position: 'absolute', left: 0, right: 0, bottom: 0, height: bar, background: '#000'}} />
+						</AbsoluteFill>
+					);
+				}
+				if (v.type === 'vhs') {
+					const bandY = ((t - v.atMs) / 1200) * height * 1.3 - height * 0.15;
+					return (
+						<AbsoluteFill key={k} style={{opacity: Math.min(1, Math.sin(Math.PI * v.u) * 2)}}>
+							<AbsoluteFill style={{background: 'repeating-linear-gradient(0deg, rgba(0,0,0,0.22) 0px, rgba(0,0,0,0.22) 2px, transparent 2px, transparent 5px)', mixBlendMode: 'multiply'}} />
+							<div style={{position: 'absolute', left: 0, right: 0, top: bandY, height: height * 0.05, background: 'linear-gradient(transparent, rgba(255,255,255,0.35), transparent)', mixBlendMode: 'overlay'}} />
+							<AbsoluteFill style={{background: 'rgba(80,20,120,0.12)', mixBlendMode: 'screen'}} />
+						</AbsoluteFill>
+					);
+				}
+				if (v.type === 'flicker') return <AbsoluteFill key={k} style={{background: '#000', opacity: random(`fo${k}-${Math.round(t / 50)}`) > 0.6 ? 0.35 : 0}} />;
 				if (v.type === 'glitch') {
 					const step = Math.round(t / 40);
 					return (
-						<AbsoluteFill key={v.atMs} style={{mixBlendMode: 'screen'}}>
+						<AbsoluteFill key={k} style={{mixBlendMode: 'screen'}}>
 							{Array.from({length: 7}, (_, i) => {
-								const r = (k: string) => random(`g${v.atMs}-${step}-${i}-${k}`);
+								const r = (key: string) => random(`g${k}-${step}-${i}-${key}`);
 								return (
 									<div
 										key={i}
