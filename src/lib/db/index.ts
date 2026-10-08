@@ -13,7 +13,7 @@ const sql =
 	globalForDb.sql ??
 	postgres(url, {
 		prepare: false,
-		max: process.env.VERCEL ? 1 : 10, // serverless: one connection per function instance; the pooler fans out
+		max: process.env.VERCEL ? 1 : 5, // few connections per process: Supabase's free tier caps pooler clients
 		idle_timeout: 20,
 	});
 if (process.env.NODE_ENV !== 'production') globalForDb.sql = sql;

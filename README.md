@@ -15,32 +15,47 @@ The presenter's recorded voice is never replaced or generated. Takes are only cu
 
 1. **Sign up / sign in** (email + password; Google optional). Better Auth, sessions in Postgres.
 2. **API keys**: Anthropic (planning) plus OpenAI Whisper or Deepgram (transcription). AES-256-GCM encrypted, never sent back to the browser.
-3. **Upload**: the browser reads the clip's size and length (MP4/MOV parsed from the container, so HEVC works too), extracts a 16 kHz mono WAV with WebAudio, and uploads both **straight to S3** with presigned PUT URLs.
+3. **Upload**: the browser reads the clip's size and length (MP4/MOV parsed from the container, so HEVC works too), extracts a 16 kHz mono WAV with WebAudio, and uploads both: to the local `storage/` folder on your Mac, or straight to S3 with presigned URLs once S3 is configured.
 4. **Analysis** runs in the background (`after()` in `/api/projects/[id]/start`): transcription, then the variant's planner. Claude only returns word indices; `toPlan()` turns them into time ranges.
-5. **Render**: **Remotion Lambda** renders the composition (reading the source through a CloudFront signed URL) and writes the MP4 straight into the S3 bucket. The status endpoint polls progress. Without Lambda, `npm run worker` renders locally.
-6. **Playback and downloads** redirect to short-lived CloudFront signed URLs (downloads use S3 presigned URLs so the filename sticks).
+5. **Render**: on your Mac the render worker (`npm run local` starts it) renders with Remotion and saves the MP4 next to the upload. In the cloud setup, Remotion Lambda renders and writes into the S3 bucket instead.
+6. **Playback and downloads** stream from your disk locally (or from short-lived CloudFront / S3 signed URLs in the cloud setup).
 
-Stack: Next.js 16 on Vercel · Supabase Postgres (Drizzle) · S3 + CloudFront · Remotion Lambda.
+Stack: Next.js 16 · Supabase Postgres (Drizzle) · Remotion. Runs fully on your Mac with local files; can move to Vercel + S3/CloudFront + Remotion Lambda later.
 
-## Run locally
+## Run it on your Mac (start here)
 
-Requirements: Node 20.9+ and a Postgres database (a free Supabase project works, or `npx supabase start`, or any local Postgres).
+Everything runs on your computer: the app, uploads (saved in the `storage/` folder inside the project) and video rendering. Only the database is in the cloud, on Supabase's free plan.
 
-```bash
-npm install
-cp .env.example .env.local      # set DATABASE_URL and the three secrets (openssl rand -base64 32)
-npm run db:migrate
-npm run dev                     # web app on http://localhost:3000
-npm run worker                  # local render worker, in a second terminal
-```
+**You need:** [Node.js 20.9 or newer](https://nodejs.org) (or `brew install node`), git, and a free [Supabase](https://supabase.com) account.
 
-Without `S3_BUCKET`, files are stored in `./storage`. Set the S3 variables to use your bucket from local dev too (add `http://localhost:3000` to the bucket's CORS).
+1. **Create the database.** In Supabase, create a new project (any name; pick the Mumbai region and save the database password). When it's ready, click **Connect** and copy the **Transaction pooler** connection string.
+2. **Get the code and set it up** (in Terminal):
 
-`CUTLINE_FAKE_AI=1 npm run dev` replaces transcription and planning with canned data (never on Vercel) so you can test the whole flow, including real renders and the Kit Student review, without spending credits.
+   ```bash
+   git clone https://github.com/WebWithRathor/cutline.git
+   cd cutline
+   npm install
+   npm run setup        # paste the Supabase string (with your password in place of [YOUR-PASSWORD])
+   ```
 
-`npm run studio` opens Remotion Studio on the compositions (`CaptionedVideo`, `KidsExplainer`, `StylePreview`).
+   `setup` writes `.env.local` with fresh secrets and creates the tables. Keep `.env.local` private.
+3. **Start it:**
 
-## Deploy
+   ```bash
+   npm run local        # the app and the video renderer together; stop with Ctrl+C
+   ```
+
+   Open <http://localhost:3000>, create an account, add your API keys (Anthropic, plus Deepgram or OpenAI), and make a video. The first render downloads a headless Chrome for Remotion (about 100 MB), once.
+
+To try the whole flow without spending API credits, start with `CUTLINE_FAKE_AI=1 npm run local`. That swaps transcription and planning for canned data, so the captions won't match the speech.
+
+**Free Supabase notes:** 500 MB of database (plenty: videos are on your disk, only text like transcripts and plans goes in the database). Projects **pause after a week without use**; open the Supabase dashboard and click Restore if the app says it can't reach the database.
+
+**Other handy commands:** `npm run studio` opens Remotion Studio on the compositions (`CaptionedVideo`, `KidsExplainer`, `StylePreview`); `npm run db:migrate` applies new database changes after pulling updates.
+
+## Later: move to the cloud
+
+When you are ready to host it, the app already supports Vercel + S3/CloudFront + Remotion Lambda. Nothing below is needed to run it on your Mac.
 
 Pick one AWS region for everything (Mumbai `ap-south-1` is close to India; Remotion Lambda supports it). Set the variables below in Vercel → Project Settings → Environment Variables. Vercel reserves `AWS_*` names, which is why these use `S3_*`, `CLOUDFRONT_*` and `REMOTION_AWS_*`.
 

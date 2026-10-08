@@ -7,14 +7,16 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "worker": "tsx --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/worker.ts",
+    "worker": "tsx --env-file-if-exists=.env.local scripts/worker.ts",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
+    "db:migrate": "node --env-file-if-exists=.env.local ./node_modules/.bin/drizzle-kit migrate",
     "studio": "remotion studio src/remotion/index.ts",
     "typecheck": "tsc --noEmit",
     "vercel-build": "drizzle-kit migrate && next build && tsx scripts/deploy-lambda-site.ts",
     "sync-kit": "node scripts/sync-kit.mjs",
-    "deploy:site": "tsx --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/deploy-lambda-site.ts"
+    "deploy:site": "tsx --env-file-if-exists=.env.local scripts/deploy-lambda-site.ts",
+    "setup": "node scripts/setup.mjs",
+    "local": "concurrently -k -n web,render -c yellow,cyan \"next dev\" \"npm run worker\""
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.132.0",
@@ -59,6 +61,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "concurrently": "^10.0.5",
     "drizzle-kit": "^0.31.11",
     "eslint": "^9",
     "eslint-config-next": "16.4.0",
