@@ -12,7 +12,7 @@ type ClientVariant = Omit<Variant, 'plannerGuidance'>;
 
 const defaultsOf = (v: ClientVariant) => Object.fromEntries(v.fields.map((f) => [f.name, 'default' in f ? f.default : ''])) as Record<string, string | boolean>;
 
-export function NewProjectForm({variants, disabled, storage}: {variants: ClientVariant[]; disabled: boolean; storage: 'blob' | 'local'}) {
+export function NewProjectForm({variants, disabled, storage}: {variants: ClientVariant[]; disabled: boolean; storage: 's3' | 'local'}) {
 	const router = useRouter();
 	const [variantId, setVariantId] = useState(variants[0].id);
 	const variant = useMemo(() => variants.find((v) => v.id === variantId)!, [variants, variantId]);

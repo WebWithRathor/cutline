@@ -1,14 +1,15 @@
-// Local render worker (development, or self-hosting without Vercel Sandbox).
+// Local render worker (development, or self-hosting without Remotion Lambda). Works with local disk or S3.
 // Transcription and planning run inside the web app; this process only renders queued jobs.
 // Run alongside the web app:  npm run worker
 import {randomUUID} from 'node:crypto';
-import {mkdir} from 'node:fs/promises';
+import {mkdir, rm} from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import {and, asc, eq, lt} from 'drizzle-orm';
 import {db, schema} from '@/lib/db';
 import {getServeUrl, renderComposition} from '@/server/pipeline/render';
 import {renderInput} from '@/server/render';
-import {localPath, removeKey} from '@/server/storage';
+import {putFile, removeKey} from '@/server/storage';
 
 const POLL_MS = 2000;
 const STALE_MS = 45 * 60 * 1000;
@@ -54,8 +55,15 @@ async function runJob(job: typeof schema.job.$inferSelect) {
 	if (!p) return;
 	const {compositionId, inputProps} = await renderInput(p);
 	const outKey = `projects/${p.id}/output-${randomUUID().slice(0, 8)}.mp4`;
-	await mkdir(path.dirname(localPath(outKey)), {recursive: true});
-	await renderComposition({compositionId, inputProps, outputPath: localPath(outKey), onProgress: progressWriter(p.id)});
+	const tmpDir = path.join(os.tmpdir(), 'cutline-render');
+	await mkdir(tmpDir, {recursive: true});
+	const tmp = path.join(tmpDir, `${p.id}-${Date.now()}.mp4`);
+	try {
+		await renderComposition({compositionId, inputProps, outputPath: tmp, onProgress: progressWriter(p.id)});
+		await putFile(outKey, tmp, 'video/mp4');
+	} finally {
+		await rm(tmp, {force: true});
+	}
 	if (p.outputKey) await removeKey(p.outputKey);
 	await setProject(p.id, {status: 'done', progress: 1, outputKey: outKey, error: null});
 }

@@ -1,11 +1,10 @@
 import {defineConfig} from 'drizzle-kit';
 
+// Migrations use the direct / session connection (port 5432) when given, since DDL through the
+// transaction pooler can misbehave. Falls back to DATABASE_URL.
 export default defineConfig({
 	schema: './src/lib/db/schema.ts',
 	out: './drizzle',
-	dialect: process.env.DATABASE_AUTH_TOKEN ? 'turso' : 'sqlite',
-	dbCredentials: {
-		url: process.env.DATABASE_URL ?? 'file:./data/cutline.db',
-		authToken: process.env.DATABASE_AUTH_TOKEN,
-	},
+	dialect: 'postgresql',
+	dbCredentials: {url: process.env.DATABASE_URL_DIRECT || process.env.DATABASE_URL || ''},
 });

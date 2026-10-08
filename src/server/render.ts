@@ -4,10 +4,12 @@ import {db, schema} from '@/lib/db';
 import type {CaptionedVideoProps} from '@/remotion/compositions';
 import type {KidsExplainerProps} from '@/remotion/kids/KidsExplainer';
 import {getVariant} from '@/variants';
-import {mediaUrl, removeKey, storageMode} from './storage';
+import {mediaUrl, removeKey, s3Bucket, storageMode} from './storage';
 
-// Where renders run: a Vercel Sandbox in production (needs Blob storage), the local worker otherwise.
-export const renderMode: 'vercel' | 'local' = process.env.RENDERER === 'local' ? 'local' : process.env.RENDERER === 'vercel' || process.env.VERCEL ? 'vercel' : 'local';
+// Where renders run: Remotion Lambda (AWS) when configured, the local worker otherwise.
+const lambdaConfigured = Boolean(process.env.REMOTION_LAMBDA_FUNCTION && process.env.REMOTION_SERVE_URL);
+export const renderMode: 'lambda' | 'local' = process.env.RENDERER === 'local' ? 'local' : process.env.RENDERER === 'lambda' || lambdaConfigured ? 'lambda' : 'local';
+const lambdaRegion = () => (process.env.REMOTION_AWS_REGION || process.env.S3_REGION || 'us-east-1') as import('@remotion/lambda/client').AwsRegion;
 
 type Project = typeof schema.project.$inferSelect;
 
@@ -44,55 +46,46 @@ async function setProject(id: string, patch: Partial<typeof schema.project.$infe
 export async function startRender(projectId: string) {
 	const [p] = await db.select().from(schema.project).where(eq(schema.project.id, projectId));
 	if (!p) return;
-	await setProject(projectId, {status: 'rendering', progress: 0.02, error: null});
 
 	if (renderMode === 'local') {
+		if (process.env.VERCEL) throw new Error('Rendering is not configured: set REMOTION_LAMBDA_FUNCTION and REMOTION_SERVE_URL.');
+		await setProject(projectId, {status: 'rendering', progress: 0.02, error: null});
 		await db.insert(schema.job).values({id: randomUUID(), projectId, mode: 'render'});
 		return;
 	}
 
-	if (storageMode !== 'blob') throw new Error('Vercel rendering needs Vercel Blob storage (BLOB_READ_WRITE_TOKEN).');
-	const {renderMediaOnVercel} = await import('@remotion/vercel');
-	const {restoreSnapshotSandbox} = await import('./sandbox');
+	if (storageMode !== 's3') throw new Error('Lambda rendering needs S3 storage (S3_BUCKET).');
+	const {renderMediaOnLambda} = await import('@remotion/lambda/client');
 	const {compositionId, inputProps} = await renderInput(p);
-	const sandbox = await restoreSnapshotSandbox();
-	const {sandboxId, cmdId} = await renderMediaOnVercel({
-		sandbox,
-		compositionId,
+	const {renderId, bucketName} = await renderMediaOnLambda({
+		region: lambdaRegion(),
+		functionName: process.env.REMOTION_LAMBDA_FUNCTION!,
+		serveUrl: process.env.REMOTION_SERVE_URL!,
+		composition: compositionId,
 		inputProps,
 		codec: 'h264',
 		crf: 20,
-		detached: true,
-		detachedSandboxTimeoutInMilliseconds: 40 * 60 * 1000,
-		vercelBlob: {
-			blobToken: process.env.BLOB_READ_WRITE_TOKEN!,
-			access: 'private',
-			blobPath: `projects/${projectId}/output-${randomUUID().slice(0, 8)}.mp4`,
-		},
+		// the MP4 goes straight into the app's bucket (the Lambda role needs s3:PutObject on it)
+		outName: {bucketName: s3Bucket(), key: `projects/${projectId}/output-${randomUUID().slice(0, 8)}.mp4`},
+		privacy: 'no-acl',
+		downloadBehavior: {type: 'play-in-browser'},
+		maxRetries: 2,
 	});
-	await setProject(projectId, {renderSandboxId: sandboxId, renderCmdId: cmdId, progress: 0.05});
+	await setProject(projectId, {status: 'rendering', progress: 0.04, error: null, renderId, renderBucket: bucketName});
 }
 
-// Vercel renders run detached; the status endpoint calls this to advance them.
+// Lambda renders run on their own; the status endpoint calls this to advance them.
 export async function pollRender(p: Project) {
-	if (renderMode !== 'vercel' || p.status !== 'rendering' || !p.renderSandboxId || !p.renderCmdId) return;
-	const {getRenderProgress} = await import('@remotion/vercel');
-	const pr = await getRenderProgress({sandboxId: p.renderSandboxId, cmdId: p.renderCmdId});
-	if (pr.stage === 'done') {
-		if (p.outputKey) await removeKey(p.outputKey);
-		await setProject(p.id, {status: 'done', progress: 1, outputKey: new URL(pr.url).pathname.slice(1), renderSandboxId: null, renderCmdId: null});
-		await stopSandbox(p.renderSandboxId);
-	} else if (pr.stage === 'error' || pr.stage === 'expired') {
-		await setProject(p.id, {status: 'failed', error: pr.stage === 'error' ? `Render failed: ${pr.message}` : 'The render took too long and was stopped.', renderSandboxId: null, renderCmdId: null});
-		await stopSandbox(p.renderSandboxId);
+	if (renderMode !== 'lambda' || p.status !== 'rendering' || !p.renderId || !p.renderBucket) return;
+	const {getRenderProgress} = await import('@remotion/lambda/client');
+	const pr = await getRenderProgress({renderId: p.renderId, bucketName: p.renderBucket, functionName: process.env.REMOTION_LAMBDA_FUNCTION!, region: lambdaRegion()});
+	if (pr.fatalErrorEncountered) {
+		console.error('lambda render failed', p.renderId, pr.errors.slice(0, 3));
+		await setProject(p.id, {status: 'failed', error: `The render failed: ${pr.errors[0]?.message?.slice(0, 200) ?? 'unknown error'}`, renderId: null, renderBucket: null});
+	} else if (pr.done && pr.outKey) {
+		if (p.outputKey && p.outputKey !== pr.outKey) await removeKey(p.outputKey);
+		await setProject(p.id, {status: 'done', progress: 1, outputKey: pr.outKey, renderId: null, renderBucket: null});
 	} else {
-		await setProject(p.id, {progress: Math.max(0.05, Math.min(0.99, pr.overallProgress))});
+		await setProject(p.id, {progress: Math.max(0.04, Math.min(0.99, pr.overallProgress))});
 	}
-}
-
-async function stopSandbox(sandboxId: string) {
-	const {Sandbox} = await import('@vercel/sandbox');
-	await Sandbox.get({sandboxId})
-		.then((s) => s.stop())
-		.catch(() => undefined);
 }

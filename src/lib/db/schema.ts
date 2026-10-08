@@ -1,32 +1,34 @@
-import {sql} from 'drizzle-orm';
-import {index, integer, real, sqliteTable, text, uniqueIndex} from 'drizzle-orm/sqlite-core';
+import {boolean, doublePrecision, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex} from 'drizzle-orm/pg-core';
+import type {CaptionStyleChoice, EditPlan, Word} from '@/remotion/types';
 
+// Postgres (Supabase). Only the server talks to the database (as the table owner, which bypasses RLS).
+// RLS is enabled with no policies so Supabase's public Data API (anon / authenticated keys) can read nothing.
+
+const ts = (name: string) => timestamp(name, {withTimezone: true, mode: 'date'});
 const timestamps = {
-	createdAt: integer('created_at', {mode: 'timestamp_ms'})
+	createdAt: ts('created_at').notNull().defaultNow(),
+	updatedAt: ts('updated_at')
 		.notNull()
-		.default(sql`(unixepoch() * 1000)`),
-	updatedAt: integer('updated_at', {mode: 'timestamp_ms'})
-		.notNull()
-		.default(sql`(unixepoch() * 1000)`)
+		.defaultNow()
 		.$onUpdate(() => new Date()),
 };
 
 // ---------- Better Auth tables ----------
 
-export const user = sqliteTable('user', {
+export const user = pgTable('user', {
 	id: text('id').primaryKey(),
 	name: text('name').notNull(),
 	email: text('email').notNull().unique(),
-	emailVerified: integer('email_verified', {mode: 'boolean'}).notNull().default(false),
+	emailVerified: boolean('email_verified').notNull().default(false),
 	image: text('image'),
 	...timestamps,
-});
+}).enableRLS();
 
-export const session = sqliteTable(
+export const session = pgTable(
 	'session',
 	{
 		id: text('id').primaryKey(),
-		expiresAt: integer('expires_at', {mode: 'timestamp_ms'}).notNull(),
+		expiresAt: ts('expires_at').notNull(),
 		token: text('token').notNull().unique(),
 		ipAddress: text('ip_address'),
 		userAgent: text('user_agent'),
@@ -36,9 +38,9 @@ export const session = sqliteTable(
 		...timestamps,
 	},
 	(t) => [index('session_user_idx').on(t.userId)],
-);
+).enableRLS();
 
-export const account = sqliteTable(
+export const account = pgTable(
 	'account',
 	{
 		id: text('id').primaryKey(),
@@ -50,22 +52,22 @@ export const account = sqliteTable(
 		accessToken: text('access_token'),
 		refreshToken: text('refresh_token'),
 		idToken: text('id_token'),
-		accessTokenExpiresAt: integer('access_token_expires_at', {mode: 'timestamp_ms'}),
-		refreshTokenExpiresAt: integer('refresh_token_expires_at', {mode: 'timestamp_ms'}),
+		accessTokenExpiresAt: ts('access_token_expires_at'),
+		refreshTokenExpiresAt: ts('refresh_token_expires_at'),
 		scope: text('scope'),
 		password: text('password'),
 		...timestamps,
 	},
 	(t) => [index('account_user_idx').on(t.userId)],
-);
+).enableRLS();
 
-export const verification = sqliteTable('verification', {
+export const verification = pgTable('verification', {
 	id: text('id').primaryKey(),
 	identifier: text('identifier').notNull(),
 	value: text('value').notNull(),
-	expiresAt: integer('expires_at', {mode: 'timestamp_ms'}).notNull(),
+	expiresAt: ts('expires_at').notNull(),
 	...timestamps,
-});
+}).enableRLS();
 
 // ---------- App tables ----------
 
@@ -73,7 +75,7 @@ export const PROVIDERS = ['anthropic', 'openai', 'deepgram'] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
 // User-supplied API keys, encrypted at rest (AES-256-GCM). Plaintext never leaves the server.
-export const apiKey = sqliteTable(
+export const apiKey = pgTable(
 	'api_key',
 	{
 		id: text('id').primaryKey(),
@@ -86,12 +88,12 @@ export const apiKey = sqliteTable(
 		...timestamps,
 	},
 	(t) => [uniqueIndex('api_key_user_provider_idx').on(t.userId, t.provider)],
-);
+).enableRLS();
 
 export const PROJECT_STATUSES = ['draft', 'queued', 'transcribing', 'planning', 'review', 'rendering', 'done', 'failed'] as const;
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 
-export const project = sqliteTable(
+export const project = pgTable(
 	'project',
 	{
 		id: text('id').primaryKey(),
@@ -100,28 +102,29 @@ export const project = sqliteTable(
 			.references(() => user.id, {onDelete: 'cascade'}),
 		title: text('title').notNull(),
 		variantId: text('variant_id').notNull(),
-		brief: text('brief', {mode: 'json'}).$type<Record<string, unknown>>().notNull().default({}),
-		captionStyle: text('caption_style', {mode: 'json'}).$type<import('@/remotion/types').CaptionStyleChoice>().notNull(),
+		brief: jsonb('brief').$type<Record<string, unknown>>().notNull().default({}),
+		captionStyle: jsonb('caption_style').$type<CaptionStyleChoice>().notNull(),
 		status: text('status', {enum: PROJECT_STATUSES}).notNull().default('draft'),
-		progress: real('progress').notNull().default(0),
+		progress: doublePrecision('progress').notNull().default(0),
 		error: text('error'),
 		sourceKey: text('source_key'),
 		sourceName: text('source_name'),
 		audioKey: text('audio_key'), // 16 kHz mono WAV extracted in the browser, used for transcription
-		renderSandboxId: text('render_sandbox_id'), // Vercel Sandbox render in flight
-		renderCmdId: text('render_cmd_id'),
-		durationSec: real('duration_sec'),
+		renderId: text('render_id'), // Remotion Lambda render in flight
+		renderBucket: text('render_bucket'),
+		durationSec: doublePrecision('duration_sec'),
 		width: integer('width'),
 		height: integer('height'),
-		transcript: text('transcript', {mode: 'json'}).$type<import('@/remotion/types').Word[]>(),
-		plan: text('plan', {mode: 'json'}).$type<import('@/remotion/types').EditPlan>(),
+		transcript: jsonb('transcript').$type<Word[]>(),
+		plan: jsonb('plan').$type<EditPlan>(),
 		outputKey: text('output_key'),
 		...timestamps,
 	},
 	(t) => [index('project_user_idx').on(t.userId)],
-);
+).enableRLS();
 
-export const job = sqliteTable(
+// Local render queue (development / self-hosting without Lambda).
+export const job = pgTable(
 	'job',
 	{
 		id: text('id').primaryKey(),
@@ -131,13 +134,13 @@ export const job = sqliteTable(
 		status: text('status', {enum: ['queued', 'running', 'done', 'failed']})
 			.notNull()
 			.default('queued'),
-		mode: text('mode', {enum: ['full', 'render']})
+		mode: text('mode', {enum: ['render']})
 			.notNull()
-			.default('full'), // full = transcribe + plan + render; render = re-render with current plan/style
+			.default('render'),
 		attempts: integer('attempts').notNull().default(0),
 		error: text('error'),
-		lockedAt: integer('locked_at', {mode: 'timestamp_ms'}),
+		lockedAt: ts('locked_at'),
 		...timestamps,
 	},
 	(t) => [index('job_status_idx').on(t.status)],
-);
+).enableRLS();

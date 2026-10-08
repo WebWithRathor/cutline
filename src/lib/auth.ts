@@ -21,7 +21,7 @@ export const auth = betterAuth({
 	// preview deployments get their own URLs
 	trustedOrigins: process.env.VERCEL_URL ? [`https://${process.env.VERCEL_URL}`] : undefined,
 	database: drizzleAdapter(db, {
-		provider: 'sqlite',
+		provider: 'pg',
 		schema: {user: schema.user, session: schema.session, account: schema.account, verification: schema.verification},
 	}),
 	emailAndPassword: {enabled: true, minPasswordLength: 8},

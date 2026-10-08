@@ -1,6 +1,5 @@
 'use client';
 
-import {upload} from '@vercel/blob/client';
 
 export type VideoInfo = {durationSec: number; width: number; height: number};
 
@@ -103,43 +102,50 @@ function encodeWav(samples: Float32Array, rate: number) {
 	return new Blob([buf], {type: 'audio/wav'});
 }
 
-const ext = (name: string) => (name.match(/\.[a-z0-9]+$/i)?.[0] ?? '.mp4').toLowerCase();
+function xhrPut(url: string, body: Blob, headers: Record<string, string>, onProgress?: (p: number) => void) {
+	return new Promise<string>((resolve, reject) => {
+		const xhr = new XMLHttpRequest();
+		xhr.open('PUT', url);
+		for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
+		xhr.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total);
+		xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve(xhr.responseText) : reject(new Error(errorOf(xhr.responseText))));
+		xhr.onerror = () => reject(new Error('Upload failed. Check your connection and try again.'));
+		xhr.send(body);
+	});
+}
+
+function errorOf(text: string) {
+	try {
+		return (JSON.parse(text) as {error?: string}).error ?? 'Upload failed. Try again.';
+	} catch {
+		return 'Upload failed. Try again.';
+	}
+}
 
 // Uploads a file for a project and returns its storage key.
+// S3: ask the app for a presigned PUT, then upload straight to the bucket. Local: PUT to the app.
 export async function uploadProjectFile(opts: {
 	projectId: string;
 	file: Blob;
 	kind: 'source' | 'audio';
 	fileName: string;
-	storage: 'blob' | 'local';
+	storage: 's3' | 'local';
 	onProgress?: (p: number) => void;
 }): Promise<string> {
 	const {projectId, file, kind, fileName, storage, onProgress} = opts;
-	if (storage === 'blob') {
-		const pathname = `projects/${projectId}/${kind === 'audio' ? 'audio.wav' : `source${ext(fileName)}`}`;
-		const res = await upload(pathname, file, {
-			access: 'private',
-			handleUploadUrl: `/api/projects/${projectId}/upload`,
-			multipart: file.size > 50 * 1024 * 1024,
-			contentType: kind === 'audio' ? 'audio/wav' : file.type || 'video/mp4',
-			onUploadProgress: ({percentage}) => onProgress?.(percentage / 100),
+	if (storage === 's3') {
+		const res = await fetch(`/api/projects/${projectId}/upload`, {
+			method: 'POST',
+			headers: {'Content-Type': 'application/json'},
+			body: JSON.stringify({kind, fileName, size: file.size}),
 		});
-		return res.pathname;
+		const body = (await res.json().catch(() => ({}))) as {key?: string; url?: string; headers?: Record<string, string>; error?: string};
+		if (!res.ok || !body.url || !body.key) throw new Error(body.error ?? 'Upload failed. Try again.');
+		await xhrPut(body.url, file, body.headers ?? {}, onProgress);
+		return body.key;
 	}
-	return new Promise((resolve, reject) => {
-		const xhr = new XMLHttpRequest();
-		xhr.open('PUT', `/api/projects/${projectId}/upload?kind=${kind}`);
-		xhr.setRequestHeader('x-file-name', encodeURIComponent(fileName));
-		xhr.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total);
-		xhr.onload = () => {
-			let body: {key?: string; error?: string} = {};
-			try {
-				body = JSON.parse(xhr.responseText);
-			} catch {}
-			if (xhr.status >= 200 && xhr.status < 300 && body.key) resolve(body.key);
-			else reject(new Error(body.error ?? 'Upload failed. Try again.'));
-		};
-		xhr.onerror = () => reject(new Error('Upload failed. Check your connection and try again.'));
-		xhr.send(file);
-	});
+	const text = await xhrPut(`/api/projects/${projectId}/upload?kind=${kind}`, file, {'x-file-name': encodeURIComponent(fileName)}, onProgress);
+	const key = (JSON.parse(text) as {key?: string}).key;
+	if (!key) throw new Error('Upload failed. Try again.');
+	return key;
 }

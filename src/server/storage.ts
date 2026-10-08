@@ -4,11 +4,35 @@ import {mkdir, readFile, rm, stat} from 'node:fs/promises';
 import path from 'node:path';
 import {Readable} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
-import {del, head, issueSignedToken, list, presignUrl} from '@vercel/blob';
+import {DeleteObjectCommand, DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client} from '@aws-sdk/client-s3';
+import {getSignedUrl as signCloudFront} from '@aws-sdk/cloudfront-signer';
+import {getSignedUrl as presignS3} from '@aws-sdk/s3-request-presigner';
 
-// Files live on local disk in development and in Vercel Blob (private) when BLOB_READ_WRITE_TOKEN is set.
-// Keys are paths like `projects/<id>/source.mp4` (for Blob: the blob pathname).
-export const storageMode: 'blob' | 'local' = process.env.BLOB_READ_WRITE_TOKEN ? 'blob' : 'local';
+// Files live in a private S3 bucket (reads through CloudFront signed URLs) when S3_BUCKET is set,
+// and on local disk otherwise (development). Keys look like `projects/<id>/source.mp4`.
+export const storageMode: 's3' | 'local' = process.env.S3_BUCKET ? 's3' : 'local';
+
+const BUCKET = process.env.S3_BUCKET ?? '';
+// Vercel reserves AWS_* names, so credentials use S3_* (falling back to the Remotion Lambda ones).
+const region = process.env.S3_REGION || process.env.REMOTION_AWS_REGION || 'us-east-1';
+let client: S3Client | null = null;
+function s3() {
+	client ??= new S3Client({
+		region,
+		// optional: S3-compatible endpoints (MinIO, R2, a local mock)
+		...(process.env.S3_ENDPOINT ? {endpoint: process.env.S3_ENDPOINT, forcePathStyle: true} : {}),
+		credentials:
+			process.env.S3_ACCESS_KEY_ID || process.env.REMOTION_AWS_ACCESS_KEY_ID
+				? {
+						accessKeyId: (process.env.S3_ACCESS_KEY_ID || process.env.REMOTION_AWS_ACCESS_KEY_ID)!,
+						secretAccessKey: (process.env.S3_SECRET_ACCESS_KEY || process.env.REMOTION_AWS_SECRET_ACCESS_KEY)!,
+					}
+				: undefined,
+	});
+	return client;
+}
+export const s3Bucket = () => BUCKET;
+export const s3Region = () => region;
 
 const ROOT = path.resolve(/*turbopackIgnore: true*/ process.env.STORAGE_DIR ?? './storage');
 
@@ -18,8 +42,16 @@ export function localPath(key: string) {
 	return p;
 }
 
-// ---------- local-only helpers (dev uploads, local worker) ----------
+// ---------- uploads ----------
 
+// S3: a presigned PUT the browser uploads to directly (single PUT supports up to 5 GB).
+export async function presignedUpload(key: string, contentType: string, maxBytes: number) {
+	const cmd = new PutObjectCommand({Bucket: BUCKET, Key: key, ContentType: contentType});
+	const url = await presignS3(s3(), cmd, {expiresIn: 60 * 60, signableHeaders: new Set(['content-type'])});
+	return {url, headers: {'Content-Type': contentType}, maxBytes};
+}
+
+// Local: write a request body to disk.
 export async function writeLocal(key: string, body: ReadableStream<Uint8Array>, maxBytes: number) {
 	const p = localPath(key);
 	await mkdir(path.dirname(p), {recursive: true});
@@ -37,51 +69,74 @@ export async function writeLocal(key: string, body: ReadableStream<Uint8Array>, 
 	return total;
 }
 
+// Stores a finished file (used by the local render worker).
+export async function putFile(key: string, filePath: string, contentType: string) {
+	if (storageMode === 'local') {
+		if (path.resolve(filePath) === localPath(key)) return;
+		await mkdir(path.dirname(localPath(key)), {recursive: true});
+		await pipeline(createReadStream(filePath), createWriteStream(localPath(key)));
+		return;
+	}
+	const {size} = await stat(filePath);
+	await s3().send(new PutObjectCommand({Bucket: BUCKET, Key: key, Body: createReadStream(filePath), ContentType: contentType, ContentLength: size}));
+}
+
 // ---------- both modes ----------
 
-export async function exists(key: string) {
+export async function sizeOf(key: string): Promise<number | null> {
 	try {
-		if (storageMode === 'blob') await head(key);
-		else await stat(localPath(key));
-		return true;
+		if (storageMode === 's3') return (await s3().send(new HeadObjectCommand({Bucket: BUCKET, Key: key}))).ContentLength ?? 0;
+		return (await stat(localPath(key))).size;
 	} catch {
-		return false;
+		return null;
 	}
 }
 
 export async function readBytes(key: string): Promise<Buffer> {
 	if (storageMode === 'local') return readFile(localPath(key));
-	const res = await fetch(await presignedGet(key, 600));
-	if (!res.ok) throw new Error(`Could not read ${key} (${res.status})`);
-	return Buffer.from(await res.arrayBuffer());
+	const res = await s3().send(new GetObjectCommand({Bucket: BUCKET, Key: key}));
+	return Buffer.from(await res.Body!.transformToByteArray());
 }
 
 export async function removePrefix(prefix: string) {
 	if (storageMode === 'local') return rm(localPath(prefix), {recursive: true, force: true});
-	let cursor: string | undefined;
+	let token: string | undefined;
 	do {
-		const page = await list({prefix: prefix.endsWith('/') ? prefix : `${prefix}/`, cursor});
-		if (page.blobs.length) await del(page.blobs.map((b) => b.url));
-		cursor = page.hasMore ? page.cursor : undefined;
-	} while (cursor);
+		const page = await s3().send(new ListObjectsV2Command({Bucket: BUCKET, Prefix: prefix.endsWith('/') ? prefix : `${prefix}/`, ContinuationToken: token}));
+		const keys = (page.Contents ?? []).map((o) => ({Key: o.Key!}));
+		if (keys.length) await s3().send(new DeleteObjectsCommand({Bucket: BUCKET, Delete: {Objects: keys, Quiet: true}}));
+		token = page.IsTruncated ? page.NextContinuationToken : undefined;
+	} while (token);
 }
 
 export async function removeKey(key: string) {
 	if (storageMode === 'local') return rm(localPath(key), {force: true});
-	await del(key).catch(() => undefined);
+	await s3()
+		.send(new DeleteObjectCommand({Bucket: BUCKET, Key: key}))
+		.catch(() => undefined);
 }
 
-async function presignedGet(key: string, ttlSec: number) {
-	const validUntil = Date.now() + ttlSec * 1000;
-	const pathname = key.startsWith('http') ? new URL(key).pathname.slice(1) : key;
-	const token = await issueSignedToken({pathname, operations: ['get'], validUntil});
-	const {presignedUrl} = await presignUrl(token, {operation: 'get', pathname, access: 'private', validUntil});
-	return presignedUrl;
+// A short-lived URL anyone holding it can GET: CloudFront signed URL when configured, else an S3 presigned GET.
+async function signedGet(key: string, ttlSec: number, downloadName?: string) {
+	const domain = process.env.CLOUDFRONT_DOMAIN;
+	const keyPairId = process.env.CLOUDFRONT_KEY_PAIR_ID;
+	const privateKey = process.env.CLOUDFRONT_PRIVATE_KEY?.replace(/\\n/g, '\n');
+	// downloads use S3 directly so the filename override (response-content-disposition) is always honored
+	if (domain && keyPairId && privateKey && !downloadName) {
+		return signCloudFront({
+			url: `https://${domain.replace(/^https?:\/\//, '').replace(/\/$/, '')}/${key.split('/').map(encodeURIComponent).join('/')}`,
+			keyPairId,
+			privateKey,
+			dateLessThan: new Date(Date.now() + ttlSec * 1000).toISOString(),
+		});
+	}
+	const cmd = new GetObjectCommand({Bucket: BUCKET, Key: key, ResponseContentDisposition: downloadName ? `attachment; filename="${downloadName}"` : undefined});
+	return presignS3(s3(), cmd, {expiresIn: Math.min(ttlSec, 7 * 24 * 3600)});
 }
 
 // A URL a third party (renderer, transcription API) can fetch for a while without a user session.
-export async function mediaUrl(key: string, ttlSec = 60 * 60 * 3) {
-	if (storageMode === 'blob') return presignedGet(key, ttlSec);
+export async function mediaUrl(key: string, ttlSec = 60 * 60 * 6) {
+	if (storageMode === 's3') return signedGet(key, ttlSec);
 	const exp = Math.floor(Date.now() / 1000) + ttlSec;
 	return `${appUrl()}/api/files/signed?key=${encodeURIComponent(key)}&exp=${exp}&sig=${sign(key, exp)}`;
 }
@@ -93,9 +148,9 @@ export function appUrl() {
 	return 'http://localhost:3000';
 }
 
-// Serves a stored file to a signed-in user. Blob: redirect to a short-lived presigned URL. Local: stream with Range support.
+// Serves a stored file to a signed-in user. S3: redirect to a short-lived signed URL. Local: stream with Range support.
 export async function serveFile(key: string, request: Request, contentType: string, downloadName?: string) {
-	if (storageMode === 'blob') return Response.redirect(await presignedGet(key, 60 * 30), 302);
+	if (storageMode === 's3') return Response.redirect(await signedGet(key, 60 * 60, downloadName), 302);
 	return localFileResponse(key, request, contentType, downloadName);
 }
 

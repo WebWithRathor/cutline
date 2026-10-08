@@ -8,7 +8,7 @@ export async function GET(_request: Request, ctx: RouteContext<'/api/projects/[i
 	const {id} = await ctx.params;
 	let p = await getOwnedProject(session.user.id, id);
 	if (!p) return Response.json({error: 'Not found'}, {status: 404});
-	if (p.status === 'rendering' && p.renderSandboxId) {
+	if (p.status === 'rendering' && p.renderId) {
 		await pollRender(p).catch((e) => console.error('poll render', e));
 		p = (await getOwnedProject(session.user.id, id)) ?? p;
 	}

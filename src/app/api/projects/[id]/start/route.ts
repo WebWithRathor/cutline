@@ -5,7 +5,7 @@ import {getSession} from '@/lib/auth';
 import {db, schema} from '@/lib/db';
 import {getOwnedProject} from '@/lib/projects';
 import {analyzeProject} from '@/server/pipeline/analyze';
-import {exists} from '@/server/storage';
+import {sizeOf} from '@/server/storage';
 
 export const maxDuration = 300; // transcription + planning run after the response, within this budget
 
@@ -31,8 +31,8 @@ export async function POST(request: Request, ctx: RouteContext<'/api/projects/[i
 	const b = parsed.data;
 	const prefix = `projects/${id}/`;
 	if (!b.sourceKey.startsWith(prefix) || (b.audioKey && !b.audioKey.startsWith(prefix))) return Response.json({error: 'Invalid upload.'}, {status: 400});
-	if (!(await exists(b.sourceKey))) return Response.json({error: 'The video upload did not finish.'}, {status: 400});
-	const audioKey = b.audioKey && (await exists(b.audioKey)) ? b.audioKey : null;
+	if (!(await sizeOf(b.sourceKey))) return Response.json({error: 'The video upload did not finish.'}, {status: 400});
+	const audioKey = b.audioKey && (await sizeOf(b.audioKey)) ? b.audioKey : null;
 
 	await db
 		.update(schema.project)

@@ -1,13 +1,13 @@
 import path from 'node:path';
-import {handleUpload, type HandleUploadBody} from '@vercel/blob/client';
+import {z} from 'zod';
 import {getSession} from '@/lib/auth';
 import {getOwnedProject} from '@/lib/projects';
-import {storageMode, writeLocal} from '@/server/storage';
+import {presignedUpload, storageMode, writeLocal} from '@/server/storage';
 
 const MAX_VIDEO = 2 * 1024 * 1024 * 1024; // 2 GB
 const MAX_AUDIO = 200 * 1024 * 1024;
 const VIDEO_EXT = new Set(['.mp4', '.mov', '.m4v', '.webm', '.mkv']);
-const VIDEO_TYPES = ['video/mp4', 'video/quicktime', 'video/x-m4v', 'video/webm', 'video/x-matroska'];
+const VIDEO_TYPE: Record<string, string> = {'.mp4': 'video/mp4', '.mov': 'video/quicktime', '.m4v': 'video/x-m4v', '.webm': 'video/webm', '.mkv': 'video/x-matroska'};
 
 async function owned(ctx: RouteContext<'/api/projects/[id]/upload'>) {
 	const session = await getSession();
@@ -19,35 +19,23 @@ async function owned(ctx: RouteContext<'/api/projects/[id]/upload'>) {
 	return {project};
 }
 
-// Production: the browser uploads straight to Vercel Blob; this hands out a scoped client token.
+const Ask = z.object({kind: z.enum(['source', 'audio']), fileName: z.string().max(200), size: z.number().int().positive()});
+
+// Production: returns a presigned S3 PUT so the browser uploads straight to the bucket.
 export async function POST(request: Request, ctx: RouteContext<'/api/projects/[id]/upload'>) {
-	if (storageMode !== 'blob') return Response.json({error: 'Blob storage is not configured.'}, {status: 400});
-	const body = (await request.json()) as HandleUploadBody;
-	// the completion callback comes from Vercel (no session) and needs no action here
-	if (body.type === 'blob.upload-completed') return Response.json(await handleUpload({body, request, onBeforeGenerateToken: async () => ({}), onUploadCompleted: async () => undefined}));
+	if (storageMode !== 's3') return Response.json({error: 'S3 is not configured.'}, {status: 400});
 	const o = await owned(ctx);
 	if (o.error) return o.error;
-	const id = o.project.id;
-	try {
-		const result = await handleUpload({
-			body,
-			request,
-			onBeforeGenerateToken: async (pathname) => {
-				const isAudio = pathname === `projects/${id}/audio.wav`;
-				const isVideo = pathname.startsWith(`projects/${id}/source`) && VIDEO_EXT.has(path.extname(pathname).toLowerCase());
-				if (!isAudio && !isVideo) throw new Error('Unexpected upload path.');
-				return {
-					allowedContentTypes: isAudio ? ['audio/wav', 'audio/x-wav'] : VIDEO_TYPES,
-					maximumSizeInBytes: isAudio ? MAX_AUDIO : MAX_VIDEO,
-					addRandomSuffix: true,
-				};
-			},
-			onUploadCompleted: async () => undefined,
-		});
-		return Response.json(result);
-	} catch (e) {
-		return Response.json({error: e instanceof Error ? e.message : 'Upload refused.'}, {status: 400});
-	}
+	const parsed = Ask.safeParse(await request.json().catch(() => null));
+	if (!parsed.success) return Response.json({error: 'Invalid upload request.'}, {status: 400});
+	const {kind, fileName, size} = parsed.data;
+	const ext = kind === 'audio' ? '.wav' : path.extname(fileName).toLowerCase();
+	if (kind === 'source' && !VIDEO_EXT.has(ext)) return Response.json({error: 'Upload an MP4, MOV, M4V, WebM or MKV file.'}, {status: 415});
+	const max = kind === 'audio' ? MAX_AUDIO : MAX_VIDEO;
+	if (size > max) return Response.json({error: kind === 'audio' ? 'The audio track is too large.' : 'Videos can be up to 2 GB.'}, {status: 413});
+	const key = `projects/${o.project.id}/${kind}${ext}`;
+	const {url, headers} = await presignedUpload(key, kind === 'audio' ? 'audio/wav' : VIDEO_TYPE[ext], max);
+	return Response.json({key, url, headers});
 }
 
 // Development: PUT the file as the request body (?kind=source|audio), stored on local disk.

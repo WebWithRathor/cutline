@@ -2,9 +2,9 @@
 
 @AGENTS.md
 
-- Product: Cutline. Next.js 16 (App Router, Turbopack), Better Auth, Drizzle + libSQL (SQLite locally, Turso in prod), Remotion 4.0.534 (all remotion packages pinned to the same exact version; zod pinned to 4.5.4 for Remotion).
-- Hosting: Vercel. Uploads go browser → Vercel Blob (private). Renders run in Vercel Sandbox via `@remotion/vercel` (pinned `@vercel/sandbox@1.6.0`; v3 broke the sandboxId API it uses). Local dev renders with `npm run worker`.
-- Test without credits: `CUTLINE_FAKE_AI=1` (dev only). The sandbox's bundled Chromium can't decode H.264; use real Chrome or WebM clips for browser tests.
+- Product: Cutline. Next.js 16 (App Router, Turbopack), Better Auth, Drizzle + Supabase Postgres (postgres-js via the transaction pooler, prepare:false; RLS on, no policies), Remotion 4.0.534 (all remotion packages pinned to the same exact version; zod pinned to 4.5.4 for Remotion).
+- Hosting: Vercel. Uploads go browser → S3 via presigned PUT; reads use CloudFront signed URLs (S3 presigned fallback). Renders run on Remotion Lambda and write the MP4 into the app bucket (`outName: {bucketName, key}`, `privacy: 'no-acl'`). Without Lambda env vars, `npm run worker` renders locally (works with disk or S3). Vercel reserves AWS_* env names, so the app uses S3_*, CLOUDFRONT_*, REMOTION_AWS_*.
+- Test without credits: `CUTLINE_FAKE_AI=1` (dev only). `S3_ENDPOINT` lets a mock S3 (moto) or MinIO stand in for AWS. The sandbox's bundled Chromium can't decode H.264; use real Chrome or WebM clips for browser tests.
 - Kit Student follows the user's `kids-explainer-edit` skill: never generate or replace the presenter's voice; show takes + beat plan and wait for approval; character bubbles ≤ 5 words; only true science in visuals.
 - `kids-kit/` is the source of truth for the cast. Run `npm run sync-kit` after changing it (regenerates `src/remotion/kids/kit-source.ts`).
 - Checks before committing: `npm run typecheck`, `npx eslint src scripts`, `npx next build`.

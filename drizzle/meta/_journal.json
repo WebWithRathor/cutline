@@ -1,26 +1,19 @@
 {
   "version": "7",
-  "dialect": "sqlite",
+  "dialect": "postgresql",
   "entries": [
     {
       "idx": 0,
-      "version": "6",
-      "when": 1791414440696,
-      "tag": "0000_wakeful_the_hood",
+      "version": "7",
+      "when": 1791448571647,
+      "tag": "0000_init",
       "breakpoints": true
     },
     {
       "idx": 1,
-      "version": "6",
-      "when": 1791414900797,
-      "tag": "0001_noisy_white_queen",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "6",
-      "when": 1791446864546,
-      "tag": "0002_yielding_metal_master",
+      "version": "7",
+      "when": 1791449177793,
+      "tag": "0001_enable_rls",
       "breakpoints": true
     }
   ]
