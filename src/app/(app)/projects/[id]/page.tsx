@@ -1,6 +1,7 @@
 import type {Metadata} from 'next';
 import {notFound} from 'next/navigation';
 import {requireUser} from '@/lib/auth';
+import {listKeys} from '@/lib/keys';
 import {STATUS_LABEL, getOwnedProject} from '@/lib/projects';
 import {getVariant} from '@/variants';
 import {deleteProject} from '../actions';
@@ -21,6 +22,7 @@ export default async function ProjectPage(props: PageProps<'/projects/[id]'>) {
 	const p = await getOwnedProject(user.id, id);
 	if (!p) notFound();
 	const variant = getVariant(p.variantId);
+	const hasHiggsfield = (await listKeys(user.id)).some((k) => k.provider === 'higgsfield');
 
 	return (
 		<div className="max-w-5xl">
@@ -50,6 +52,8 @@ export default async function ProjectPage(props: PageProps<'/projects/[id]'>) {
 					transcript: p.transcript ?? null,
 					plan: p.plan ?? null,
 					style: p.captionStyle,
+					creative: p.creative ?? null,
+					hasHiggsfield,
 					renderer: variant?.renderer ?? 'captioned',
 				}}
 			/>

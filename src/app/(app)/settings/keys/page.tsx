@@ -16,7 +16,7 @@ export default async function KeysPage() {
 				Cutline calls these providers with your keys, so usage is billed to your accounts. Keys are encrypted before they’re stored and are never shown again
 				after you save them.
 			</p>
-			<p className="mt-2 text-sm text-muted">You need an Anthropic key plus one transcription key (OpenAI or Deepgram).</p>
+			<p className="mt-2 text-sm text-muted">You need a Gemini key and an Anthropic key. Higgsfield is optional: without it, AI-footage B-roll falls back to built-in animated cards.</p>
 			<ul className="mt-8 divide-y divide-line rounded-xl border border-line bg-surface">
 				{PROVIDERS.map((p) => (
 					<KeyRow key={p} provider={p} info={PROVIDER_INFO[p]} saved={saved.get(p) ? {last4: saved.get(p)!.last4} : null} />

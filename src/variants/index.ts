@@ -90,14 +90,27 @@ export const VARIANTS: Variant[] = [
 	{
 		id: 'talking-head',
 		name: 'Talking head',
-		description: 'Creator-style short: tight cuts, punchy captions, keywords that pop.',
+		description: 'Creator-style short: Gemini sets the look, Claude cuts it with captions, grade, effects, sounds and B-roll.',
 		defaultPresetId: 'dynamic-minimal',
 		renderer: 'captioned',
-		review: false,
+		review: true,
 		output: 'Same size as your clip',
 		fields: [
 			{type: 'textarea', name: 'goal', label: 'What is this video for?', placeholder: 'e.g. Promote my new course to beginner editors'},
 			PACING,
+			{
+				type: 'select',
+				name: 'broll',
+				label: 'B-roll',
+				default: 'auto',
+				options: [
+					{value: 'auto', label: 'Mix: cards, HyperFrames animations and AI footage, as the brief suggests'},
+					{value: 'remotion', label: 'Built-in cards only (free)'},
+					{value: 'none', label: 'No B-roll'},
+				],
+				hint: 'You can switch any clip between sources on the review screen. Nothing paid is generated until you approve.',
+			},
+			{type: 'toggle', name: 'aiStyle', label: 'Let the AI pick the caption style', default: true, hint: 'Off: always use the style you set below.'},
 			{type: 'toggle', name: 'hook', label: 'Add a hook title in the first 2 seconds', default: false},
 		],
 		plannerGuidance: (b) =>

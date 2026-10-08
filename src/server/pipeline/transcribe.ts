@@ -1,67 +1,176 @@
 import type {Word} from '@/remotion/types';
+import {ProviderError} from './errors';
+import {Gemini, S, type Part} from './gemini';
 
-export class ProviderError extends Error {}
+export {ProviderError};
 
-const keyRejected = (name: string) => new ProviderError(`${name} rejected your API key. Replace it in API keys and try again.`);
+// ---------- Gemini transcription with word timings ----------
+// The 16 kHz mono WAV from the browser is split into ~75 s chunks at the quietest moment near each
+// boundary, so a cut never lands mid-word and timings stay tight on long recordings.
 
-async function failure(res: Response, name: string) {
-	if (res.status === 401 || res.status === 403) return keyRejected(name);
-	if (res.status === 429) return new ProviderError(`${name} rate-limited the request or your account is out of credit.`);
-	const body = await res.text().catch(() => '');
-	return new ProviderError(`${name} transcription failed (${res.status}). ${body.slice(0, 200)}`);
+const CHUNK_SEC = 75;
+const SEARCH_SEC = 5;
+const CONCURRENCY = 3;
+
+const SYSTEM =
+	'You are a verbatim transcriber for a video editor. Transcribe exactly what is spoken, word by word, in the spoken language. ' +
+	'Keep every filler word (um, uh, like), false start, stutter and repeated take: the editor needs them to choose cuts. Never summarize, fix or translate. ' +
+	'Attach punctuation to the word before it. Give each word its start and end time in seconds from the start of this audio, as precisely as you can (two decimals). ' +
+	'Return an empty list if nobody speaks.';
+
+const SCHEMA = S.obj({
+	words: S.arr(S.obj({w: S.str('the word with its punctuation'), s: S.num('start, seconds'), e: S.num('end, seconds')})),
+});
+
+type Wav = {rate: number; samples: Int16Array};
+
+export function parseWav(buf: Buffer): Wav | null {
+	if (buf.length < 44 || buf.toString('ascii', 0, 4) !== 'RIFF' || buf.toString('ascii', 8, 12) !== 'WAVE') return null;
+	let off = 12;
+	let rate = 16000;
+	let bits = 16;
+	let channels = 1;
+	while (off + 8 <= buf.length) {
+		const id = buf.toString('ascii', off, off + 4);
+		const size = buf.readUInt32LE(off + 4);
+		if (id === 'fmt ') {
+			channels = buf.readUInt16LE(off + 10);
+			rate = buf.readUInt32LE(off + 12);
+			bits = buf.readUInt16LE(off + 22);
+		} else if (id === 'data') {
+			if (bits !== 16 || channels !== 1) return null;
+			const end = Math.min(buf.length, off + 8 + size);
+			const copy = Buffer.from(buf.subarray(off + 8, end - ((end - off - 8) % 2)));
+			return {rate, samples: new Int16Array(copy.buffer, copy.byteOffset, copy.length / 2)};
+		}
+		off += 8 + size + (size % 2);
+	}
+	return null;
 }
 
-// ---------- Deepgram: punctuated words with timestamps in one call. Takes audio bytes or a URL it can fetch. ----------
-export async function transcribeDeepgram(input: {audio: Buffer} | {url: string}, apiKey: string): Promise<Word[]> {
-	const res = await fetch('https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&punctuate=true&detect_language=true', {
-		method: 'POST',
-		headers: {Authorization: `Token ${apiKey}`, 'Content-Type': 'audio' in input ? 'audio/wav' : 'application/json'},
-		body: 'audio' in input ? new Uint8Array(input.audio) : JSON.stringify({url: input.url}),
-	});
-	if (!res.ok) throw await failure(res, 'Deepgram');
-	const j = (await res.json()) as {
-		results?: {channels?: {alternatives?: {words?: {word: string; punctuated_word?: string; start: number; end: number}[]}[]}[]};
-	};
-	const words = j.results?.channels?.[0]?.alternatives?.[0]?.words ?? [];
-	return words.map((w) => ({text: w.punctuated_word ?? w.word, startMs: Math.round(w.start * 1000), endMs: Math.round(w.end * 1000)}));
+export function encodeWav({rate, samples}: Wav): Buffer {
+	const b = Buffer.alloc(44 + samples.length * 2);
+	b.write('RIFF', 0, 'ascii');
+	b.writeUInt32LE(36 + samples.length * 2, 4);
+	b.write('WAVEfmt ', 8, 'ascii');
+	b.writeUInt32LE(16, 16);
+	b.writeUInt16LE(1, 20);
+	b.writeUInt16LE(1, 22);
+	b.writeUInt32LE(rate, 24);
+	b.writeUInt32LE(rate * 2, 28);
+	b.writeUInt16LE(2, 32);
+	b.writeUInt16LE(16, 34);
+	b.write('data', 36, 'ascii');
+	b.writeUInt32LE(samples.length * 2, 40);
+	Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength).copy(b, 44);
+	return b;
 }
 
-// ---------- OpenAI Whisper: word timestamps come without punctuation, so we borrow it from segment text ----------
-export async function transcribeOpenAI(audio: Buffer, apiKey: string): Promise<Word[]> {
-	if (audio.length > 25 * 1024 * 1024) throw new ProviderError('This clip is too long for OpenAI transcription (25 MB audio limit, about 13 minutes). Add a Deepgram key or upload a shorter clip.');
-	const form = new FormData();
-	form.append('file', new Blob([new Uint8Array(audio)], {type: 'audio/wav'}), 'audio.wav');
-	form.append('model', 'whisper-1');
-	form.append('response_format', 'verbose_json');
-	form.append('timestamp_granularities[]', 'word');
-	form.append('timestamp_granularities[]', 'segment');
-	const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-		method: 'POST',
-		headers: {Authorization: `Bearer ${apiKey}`},
-		body: form,
-	});
-	if (!res.ok) throw await failure(res, 'OpenAI');
-	const j = (await res.json()) as {words?: {word: string; start: number; end: number}[]; segments?: {text: string}[]};
-	const raw = j.words ?? [];
-	const punctuated = (j.segments ?? []).flatMap((s) => s.text.trim().split(/\s+/)).filter(Boolean);
-	return alignPunctuation(raw, punctuated);
-}
-
-const norm = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
-
-// Walks both token lists in order; when a punctuated token matches the bare word, use the punctuated form.
-export function alignPunctuation(words: {word: string; start: number; end: number}[], punctuated: string[]): Word[] {
-	let j = 0;
-	return words.map((w) => {
-		const target = norm(w.word);
-		let text = w.word.trim();
-		for (let look = j; look < Math.min(punctuated.length, j + 4); look++) {
-			if (norm(punctuated[look]) === target) {
-				text = punctuated[look];
-				j = look + 1;
-				break;
+// Chunk boundaries (sample indices), each moved to the quietest 20 ms window within ±5 s of the target.
+export function chunkBounds({rate, samples}: Wav, chunkSec = CHUNK_SEC): number[] {
+	const n = samples.length;
+	const bounds = [0];
+	const win = Math.round(rate * 0.02);
+	let target = rate * chunkSec;
+	while (target < n - rate * 10) {
+		let best = target;
+		let bestE = Infinity;
+		for (let s = Math.max(bounds[bounds.length - 1] + win, target - rate * SEARCH_SEC); s < Math.min(n - win, target + rate * SEARCH_SEC); s += win) {
+			let e = 0;
+			for (let i = s; i < s + win; i++) e += samples[i] * samples[i];
+			if (e < bestE) {
+				bestE = e;
+				best = s + Math.round(win / 2);
 			}
 		}
-		return {text, startMs: Math.round(w.start * 1000), endMs: Math.round(w.end * 1000)};
+		bounds.push(best);
+		target = best + rate * chunkSec;
+	}
+	bounds.push(n);
+	return bounds;
+}
+
+// Cleans one chunk's words: drops empties, clamps to the chunk, keeps times increasing and non-overlapping.
+export function cleanWords(raw: {w?: unknown; s?: unknown; e?: unknown}[], durSec: number, offsetSec = 0): Word[] {
+	const list = raw
+		.map((r) => ({text: String(r.w ?? '').trim(), s: Number(r.s), e: Number(r.e)}))
+		.filter((r) => r.text && Number.isFinite(r.s))
+		.map((r) => ({...r, s: Math.min(durSec, Math.max(0, r.s)), e: Number.isFinite(r.e) ? Math.min(durSec, Math.max(0, r.e)) : r.s}));
+	const out: Word[] = [];
+	let prev = 0;
+	for (let i = 0; i < list.length; i++) {
+		const s = Math.max(prev, list[i].s);
+		const nextS = i + 1 < list.length ? Math.max(s, list[i + 1].s) : durSec;
+		let e = Math.max(list[i].e, s + 0.06);
+		if (e > nextS && nextS > s) e = nextS;
+		out.push({text: list[i].text, startMs: Math.round((s + offsetSec) * 1000), endMs: Math.round((Math.min(e, durSec) + offsetSec) * 1000)});
+		prev = s;
+	}
+	return out;
+}
+
+async function pool<T, R>(items: T[], limit: number, fn: (t: T, i: number) => Promise<R>): Promise<R[]> {
+	const out: R[] = new Array(items.length);
+	let next = 0;
+	await Promise.all(
+		Array.from({length: Math.min(limit, items.length)}, async () => {
+			while (next < items.length) {
+				const i = next++;
+				out[i] = await fn(items[i], i);
+			}
+		}),
+	);
+	return out;
+}
+
+const keyError = (e: unknown) => e instanceof ProviderError && /rejected your API key|rate-limited/.test(e.message);
+
+// Flash first (fast and cheap); if it fails or returns nothing usable, the Pro model tries once.
+async function transcribePart(g: Gemini, parts: Part[], expectSpeech: boolean): Promise<{w?: unknown; s?: unknown; e?: unknown}[]> {
+	let lastErr: unknown = null;
+	for (const tier of ['flash', 'pro'] as const) {
+		try {
+			const r = await g.json<{words?: {w?: unknown; s?: unknown; e?: unknown}[]}>({model: await g.model(tier), system: SYSTEM, parts, schema: SCHEMA, maxTokens: 32768});
+			const words = r.words ?? [];
+			if (words.length || !expectSpeech || tier === 'pro') return words;
+		} catch (e) {
+			if (keyError(e)) throw e;
+			lastErr = e;
+		}
+	}
+	throw lastErr ?? new ProviderError('Gemini could not transcribe this video.');
+}
+
+const rms = (s: Int16Array) => {
+	let e = 0;
+	for (let i = 0; i < s.length; i += 4) e += s[i] * s[i];
+	return Math.sqrt(e / Math.max(1, s.length / 4));
+};
+
+export async function transcribeGeminiAudio(audio: Buffer, apiKey: string): Promise<Word[]> {
+	const wav = parseWav(audio);
+	if (!wav) throw new ProviderError('The extracted audio is not a 16-bit mono WAV.');
+	const g = new Gemini(apiKey);
+	const bounds = chunkBounds(wav);
+	const chunks = bounds.slice(0, -1).map((a, i) => ({a, b: bounds[i + 1]}));
+	const results = await pool(chunks, CONCURRENCY, async ({a, b}) => {
+		const samples = wav.samples.subarray(a, b);
+		const durSec = samples.length / wav.rate;
+		const data = encodeWav({rate: wav.rate, samples}).toString('base64');
+		const raw = await transcribePart(g, [{inlineData: {mimeType: 'audio/wav', data}}, {text: `Transcribe this ${durSec.toFixed(1)} second audio clip.`}], rms(samples) > 200);
+		return cleanWords(raw, durSec, a / wav.rate);
 	});
+	return results.flat();
+}
+
+// When the browser could not extract audio, Gemini listens to the uploaded video instead.
+export async function transcribeGeminiVideo(video: Buffer, mimeType: string, durationSec: number, apiKey: string): Promise<Word[]> {
+	const g = new Gemini(apiKey);
+	const file = await g.upload(video, mimeType, 'cutline-source');
+	try {
+		const raw = await transcribePart(g, [{fileData: {fileUri: file.uri, mimeType: file.mimeType}}, {text: `Transcribe the speech in this ${durationSec.toFixed(1)} second video.`}], true);
+		return cleanWords(raw, durationSec);
+	} finally {
+		await g.remove(file);
+	}
 }

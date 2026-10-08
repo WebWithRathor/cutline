@@ -15,6 +15,13 @@
       "when": 1791449177793,
       "tag": "0001_enable_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791459724856,
+      "tag": "0002_gemini_claude",
+      "breakpoints": true
     }
   ]
 }

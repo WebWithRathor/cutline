@@ -4,6 +4,7 @@ import {db, schema} from '@/lib/db';
 import type {CaptionedVideoProps} from '@/remotion/compositions';
 import type {KidsExplainerProps} from '@/remotion/kids/KidsExplainer';
 import {getVariant} from '@/variants';
+import {needsGeneration} from './broll';
 import {mediaUrl, removeKey, s3Bucket, storageMode} from './storage';
 
 // Where renders run: Remotion Lambda (AWS) when configured, the local worker otherwise.
@@ -21,6 +22,8 @@ export async function renderInput(p: Project): Promise<{compositionId: string; i
 	const src = await mediaUrl(p.sourceKey);
 	const sourceDurationMs = (p.durationSec ?? 0) * 1000;
 	const variant = getVariant(p.variantId);
+	const brollSrc: Record<string, string> = {};
+	for (const b of p.plan.broll ?? []) if (b.assetKey && b.source !== 'remotion') brollSrc[b.id] = await mediaUrl(b.assetKey);
 	if (variant?.renderer === 'kids') {
 		return {compositionId: 'KidsExplainer', inputProps: {src, sourceDurationMs, words: p.transcript, plan: p.plan} satisfies KidsExplainerProps};
 	}
@@ -33,6 +36,8 @@ export async function renderInput(p: Project): Promise<{compositionId: string; i
 			plan: p.plan,
 			style: p.captionStyle,
 			hookText: p.brief.hook === false ? undefined : p.plan.hook,
+			palette: p.creative?.palette,
+			brollSrc,
 			width: even(p.width ?? 1080),
 			height: even(p.height ?? 1920),
 		} satisfies CaptionedVideoProps & {width: number; height: number},
@@ -55,6 +60,13 @@ export async function startRender(projectId: string) {
 	}
 
 	if (storageMode !== 's3') throw new Error('Lambda rendering needs S3 storage (S3_BUCKET).');
+	// HyperFrames needs a local Chrome + FFmpeg and Higgsfield polls for minutes, so generated B-roll is made by
+	// the local worker only. On Lambda those clips use their Remotion card.
+	if (needsGeneration(p.plan).length && p.plan) {
+		const plan = {...p.plan, broll: p.plan.broll?.map((b) => (needsGeneration(p.plan).includes(b) ? {...b, error: 'Generated B-roll needs the local render worker; the card was used.'} : b))};
+		await setProject(projectId, {plan});
+		p.plan = plan;
+	}
 	const {renderMediaOnLambda} = await import('@remotion/lambda/client');
 	const {compositionId, inputProps} = await renderInput(p);
 	const {renderId, bucketName} = await renderMediaOnLambda({

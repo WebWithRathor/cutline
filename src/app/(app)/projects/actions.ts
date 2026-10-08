@@ -14,6 +14,7 @@ import {analyzeProject} from '@/server/pipeline/analyze';
 import {startRender} from '@/server/render';
 import {removePrefix} from '@/server/storage';
 import {PRESET_META as PRESETS} from '@/remotion/captions/meta';
+import {BROLL_SOURCES, GRADE_IDS} from '@/remotion/types';
 import {getVariant} from '@/variants';
 
 const hex = z.string().regex(/^#[0-9a-fA-F]{6}$/);
@@ -51,8 +52,8 @@ export async function createProject(input: z.input<typeof CreateSchema>): Promis
 		if ('required' in f && f.required && !String(parsed.data.brief[f.name] ?? '').trim()) return {error: `${f.label} is required.`};
 	}
 	const keys = new Set((await listKeys(user.id)).map((k) => k.provider));
-	if (!keys.has('anthropic') || !(keys.has('openai') || keys.has('deepgram'))) {
-		return {error: 'Add an Anthropic key and a transcription key (OpenAI or Deepgram) in API keys first.'};
+	if (!keys.has('anthropic') || !keys.has('gemini')) {
+		return {error: 'Add a Gemini key and an Anthropic key in API keys first.'};
 	}
 	const id = randomUUID();
 	await db.insert(schema.project).values({
@@ -66,7 +67,7 @@ export async function createProject(input: z.input<typeof CreateSchema>): Promis
 	return {id};
 }
 
-// Changes the caption style of a finished project and renders again (no new transcription or planning).
+// Changes the caption style. On a finished project it renders again (no new transcription or planning).
 export async function restyleProject(id: string, style: z.input<typeof StyleSchema>): Promise<{error?: string}> {
 	const user = await requireUser();
 	const parsed = StyleSchema.safeParse(style);
@@ -74,8 +75,13 @@ export async function restyleProject(id: string, style: z.input<typeof StyleSche
 	const p = await getOwnedProject(user.id, id);
 	if (!p) return {error: 'Project not found.'};
 	if (!p.transcript || !p.plan) return {error: 'Wait for the first edit to finish.'};
-	if (!['done', 'failed'].includes(p.status)) return {error: 'This video is still being edited.'};
+	if (!['review', 'done', 'failed'].includes(p.status)) return {error: 'This video is still being edited.'};
 	await db.update(schema.project).set({captionStyle: parsed.data}).where(eq(schema.project.id, id));
+	// on the storyboard the style is only saved; the render waits for approval
+	if (p.status === 'review') {
+		revalidatePath(`/projects/${id}`);
+		return {};
+	}
 	return startOrFail(id);
 }
 
@@ -92,13 +98,49 @@ async function startOrFail(id: string): Promise<{error?: string}> {
 	return {};
 }
 
-// Kit Student: the creator approved the takes and beat plan.
+// The creator approved the storyboard: only now are B-roll clips generated and the video rendered.
 export async function approvePlan(id: string): Promise<{error?: string}> {
 	const user = await requireUser();
 	const p = await getOwnedProject(user.id, id);
 	if (!p) return {error: 'Project not found.'};
-	if (p.status !== 'review' || !p.plan) return {error: 'There is no plan waiting for approval.'};
+	if (p.status !== 'review' || !p.plan) return {error: 'There is no storyboard waiting for approval.'};
 	return startOrFail(id);
+}
+
+const StoryboardEdit = z.discriminatedUnion('kind', [
+	z.object({kind: z.literal('brollSource'), cueId: z.string().max(20), source: z.enum(BROLL_SOURCES)}),
+	z.object({kind: z.literal('removeBroll'), cueId: z.string().max(20)}),
+	z.object({kind: z.literal('removeVfx'), index: z.number().int().min(0)}),
+	z.object({kind: z.literal('removeSfx'), index: z.number().int().min(0)}),
+	z.object({kind: z.literal('grade'), grade: z.enum(GRADE_IDS)}),
+]);
+
+// Small changes to the storyboard before approving it (no AI call).
+export async function editStoryboard(id: string, edit: z.input<typeof StoryboardEdit>): Promise<{error?: string}> {
+	const user = await requireUser();
+	const parsed = StoryboardEdit.safeParse(edit);
+	if (!parsed.success) return {error: 'Invalid change.'};
+	const p = await getOwnedProject(user.id, id);
+	if (!p?.plan) return {error: 'Project not found.'};
+	if (!['review', 'done', 'failed'].includes(p.status)) return {error: 'Wait until the storyboard is ready.'};
+	const e = parsed.data;
+	const plan = {...p.plan};
+	if (e.kind === 'brollSource') {
+		const cue = plan.broll?.find((b) => b.id === e.cueId);
+		if (!cue) return {error: 'That B-roll clip no longer exists.'};
+		if (e.source === 'higgsfield' && !(await listKeys(user.id)).some((k) => k.provider === 'higgsfield')) return {error: 'Add a Higgsfield key in API keys to use AI footage.'};
+		plan.broll = plan.broll!.map((b) =>
+			b.id === e.cueId
+				? {...b, source: e.source, layout: e.source === 'remotion' ? b.layout : 'full', prompt: b.prompt ?? [b.card.title, b.card.sub].filter(Boolean).join(': '), assetKey: undefined, error: undefined}
+				: b,
+		);
+	} else if (e.kind === 'removeBroll') plan.broll = plan.broll?.filter((b) => b.id !== e.cueId);
+	else if (e.kind === 'removeVfx') plan.vfx = plan.vfx?.filter((_, i) => i !== e.index);
+	else if (e.kind === 'removeSfx') plan.sfx = plan.sfx?.filter((_, i) => i !== e.index);
+	else plan.grade = e.grade;
+	await db.update(schema.project).set({plan}).where(eq(schema.project.id, id));
+	revalidatePath(`/projects/${id}`);
+	return {};
 }
 
 // Plan again, taking the creator's notes into account. Keeps the transcript.

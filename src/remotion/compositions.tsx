@@ -5,6 +5,7 @@ import {CaptionProvider} from './captions/engine';
 import {getPreset} from './captions/presets';
 import {SAMPLE_KEYWORDS, SAMPLE_WORDS, SceneBg, Subject} from './DemoScene';
 import {loadAllFonts} from './fonts';
+import {BrollLayer, GradeOverlay, SfxTrack, VfxOverlay, gradeFilter, resolveLook, vfxTransform} from './fx/Look';
 import {buildSegments, mapWords, mapZooms, outputDurationMs} from './timeline';
 import type {CaptionStyleChoice, EditPlan, Word} from './types';
 
@@ -53,6 +54,8 @@ export type CaptionedVideoProps = {
 	plan: EditPlan | null;
 	style: CaptionStyleChoice;
 	hookText?: string;
+	palette?: string[]; // B-roll card colours (from the creative brief)
+	brollSrc?: Record<string, string>; // generated B-roll clips by cue id (HyperFrames / Higgsfield)
 	preview?: boolean; // in-browser preview: show a notice instead of throwing if the browser can't decode the clip
 };
 
@@ -140,21 +143,36 @@ const Hook: React.FC<{text: string}> = ({text}) => {
 	);
 };
 
-export const CaptionedVideo: React.FC<CaptionedVideoProps> = ({src, sourceDurationMs, words, plan, style, hookText, preview}) => {
+// Footage with the VFX transform (shake, punch zoom, whip, glitch jitter) applied on top of the zooms.
+const VfxFootage: React.FC<{look: ReturnType<typeof resolveLook>; children: React.ReactNode}> = ({look, children}) => {
+	const frame = useCurrentFrame();
+	const {fps, width} = useVideoConfig();
+	const fx = vfxTransform(look.vfx, (frame / fps) * 1000, width);
+	return <AbsoluteFill style={{transform: fx.transform, filter: fx.filter}}>{children}</AbsoluteFill>;
+};
+
+export const CaptionedVideo: React.FC<CaptionedVideoProps> = ({src, sourceDurationMs, words, plan, style, hookText, palette, brollSrc, preview}) => {
 	const segments = useMemo(() => buildSegments(plan?.keepRanges, sourceDurationMs), [plan, sourceDurationMs]);
 	const outWords = useMemo(() => mapWords(words, segments), [words, segments]);
 	const zooms = useMemo(() => mapZooms(plan?.zooms, segments), [plan, segments]);
+	const look = useMemo(() => resolveLook(plan, words, segments, brollSrc), [plan, words, segments, brollSrc]);
 	const preset = getPreset(style.presetId);
 	const {Front, Behind} = preset;
 	return (
 		<FontGate>
 			<CaptionProvider words={outWords} keywords={plan?.keywords ?? []} overrides={style.overrides}>
 				<AbsoluteFill style={{background: '#000'}}>
-					<SegmentedVideo segments={segments} src={src} scaleAt={zoomScale(zooms)} preview={preview} />
+					<VfxFootage look={look}>
+						<SegmentedVideo segments={segments} src={src} scaleAt={zoomScale(zooms)} filter={gradeFilter(look.grade)} preview={preview} />
+						<GradeOverlay grade={look.grade} />
+					</VfxFootage>
 					{/* Without a person matte, the "behind" layer is drawn over the video. */}
 					{Behind ? <Behind /> : null}
+					<BrollLayer broll={look.broll} palette={palette} />
+					<VfxOverlay vfx={look.vfx} />
 					<Front />
 					{hookText ? <Hook text={hookText} /> : null}
+					<SfxTrack sfx={look.sfx} />
 				</AbsoluteFill>
 			</CaptionProvider>
 		</FontGate>

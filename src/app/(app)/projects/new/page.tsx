@@ -11,7 +11,7 @@ export const metadata: Metadata = {title: 'New video'};
 export default async function NewProjectPage() {
 	const user = await requireUser();
 	const keys = new Set((await listKeys(user.id)).map((k) => k.provider));
-	const ready = keys.has('anthropic') && (keys.has('openai') || keys.has('deepgram'));
+	const ready = keys.has('anthropic') && keys.has('gemini');
 	// functions can't cross to the client; send only the form definition
 	const variants = VARIANTS.map((v) => ({id: v.id, name: v.name, description: v.description, fields: v.fields, defaultPresetId: v.defaultPresetId, renderer: v.renderer, review: v.review, output: v.output}));
 	return (
@@ -20,7 +20,7 @@ export default async function NewProjectPage() {
 			{!ready && (
 				<div className="mt-6 rounded-xl border border-line bg-surface p-5">
 					<p className="font-semibold">Add your API keys first</p>
-					<p className="mt-1 text-sm text-muted">Editing needs an Anthropic key and a transcription key (OpenAI or Deepgram).</p>
+					<p className="mt-1 text-sm text-muted">Editing needs a Gemini key (it watches the video) and an Anthropic key (Claude makes the edit).</p>
 					<Link href="/settings/keys" className="btn btn-primary mt-4">Add API keys</Link>
 				</div>
 			)}

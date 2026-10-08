@@ -10,7 +10,7 @@ export function KeyRow({
 	saved,
 }: {
 	provider: Provider;
-	info: {name: string; use: string; placeholder: string; docs: string};
+	info: {name: string; use: string; placeholder: string; docs: string; optional?: boolean};
 	saved: {last4: string} | null;
 }) {
 	const [editing, setEditing] = useState(!saved);

@@ -2,6 +2,9 @@
   "name": "cutline",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -14,6 +17,7 @@
     "typecheck": "tsc --noEmit",
     "vercel-build": "drizzle-kit migrate && next build && tsx scripts/deploy-lambda-site.ts",
     "sync-kit": "node scripts/sync-kit.mjs",
+    "sfx": "node scripts/make-sfx.mjs",
     "deploy:site": "tsx --env-file-if-exists=.env.local scripts/deploy-lambda-site.ts",
     "setup": "node scripts/setup.mjs",
     "local": "concurrently -k -n web,render -c yellow,cyan \"next dev\" \"npm run worker\""
@@ -46,6 +50,8 @@
     "@remotion/renderer": "4.0.534",
     "better-auth": "^1.7.7",
     "drizzle-orm": "^0.45.3",
+    "gsap": "3.15.0",
+    "hyperframes": "0.8.141",
     "mp4box": "^0.5.4",
     "next": "16.4.0",
     "postgres": "^3.4.9",
