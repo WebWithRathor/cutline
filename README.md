@@ -50,7 +50,7 @@ Everything runs on your computer: the app, uploads (saved in the `storage/` fold
 3. **Start it:**
 
    ```bash
-   npm run local        # the app and the video renderer together; stop with Ctrl+C
+   npm run local        # updates the database if needed, then runs the app and the video renderer; stop with Ctrl+C
    ```
 
    Open <http://localhost:3000>, create an account, add your API keys (Gemini and Anthropic; Higgsfield optional), and make a video. The first render downloads a headless Chrome for Remotion (about 100 MB), once.
@@ -59,7 +59,7 @@ To try the whole flow without spending API credits, start with `CUTLINE_FAKE_AI=
 
 **Free Supabase notes:** 500 MB of database (plenty: videos are on your disk, only text like transcripts and plans goes in the database). Projects **pause after a week without use**; open the Supabase dashboard and click Restore if the app says it can't reach the database.
 
-**Updating from an older version:** run `npm install` and `npm run db:migrate`. The migration deletes saved OpenAI and Deepgram keys (transcription moved to Gemini); add a Gemini key in API keys.
+**Updating from an older version:** run `npm install`, then `npm run local` (it applies new database changes before starting; `npm run db:migrate` does only that). The migration deletes saved OpenAI and Deepgram keys (transcription moved to Gemini); add a Gemini key in API keys.
 
 **Other handy commands:** `npm run studio` opens Remotion Studio on the compositions (`CaptionedVideo`, `KidsExplainer`, `StylePreview`); `npm run db:migrate` applies new database changes after pulling updates.
 

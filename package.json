@@ -20,7 +20,7 @@
     "sfx": "node scripts/make-sfx.mjs",
     "deploy:site": "tsx --env-file-if-exists=.env.local scripts/deploy-lambda-site.ts",
     "setup": "node scripts/setup.mjs",
-    "local": "concurrently -k -n web,render -c yellow,cyan \"next dev\" \"npm run worker\""
+    "local": "npm run db:migrate && concurrently -k -n web,render -c yellow,cyan \"next dev\" \"npm run worker\""
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.132.0",
