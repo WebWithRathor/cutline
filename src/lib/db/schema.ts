@@ -1,5 +1,5 @@
 import {boolean, doublePrecision, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex} from 'drizzle-orm/pg-core';
-import type {CaptionStyleChoice, EditPlan, Word} from '@/remotion/types';
+import type {CaptionStyleChoice, CreativeBrief, EditPlan, Word} from '@/remotion/types';
 
 // Postgres (Supabase). Only the server talks to the database (as the table owner, which bypasses RLS).
 // RLS is enabled with no policies so Supabase's public Data API (anon / authenticated keys) can read nothing.
@@ -71,7 +71,8 @@ export const verification = pgTable('verification', {
 
 // ---------- App tables ----------
 
-export const PROVIDERS = ['anthropic', 'openai', 'deepgram'] as const;
+// Gemini watches the video and writes the creative brief; Claude edits; Higgsfield (optional) makes AI B-roll.
+export const PROVIDERS = ['gemini', 'anthropic', 'higgsfield'] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
 // User-supplied API keys, encrypted at rest (AES-256-GCM). Plaintext never leaves the server.
@@ -90,7 +91,7 @@ export const apiKey = pgTable(
 	(t) => [uniqueIndex('api_key_user_provider_idx').on(t.userId, t.provider)],
 ).enableRLS();
 
-export const PROJECT_STATUSES = ['draft', 'queued', 'transcribing', 'planning', 'review', 'rendering', 'done', 'failed'] as const;
+export const PROJECT_STATUSES = ['draft', 'queued', 'transcribing', 'analyzing', 'planning', 'review', 'generating', 'rendering', 'done', 'failed'] as const;
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 
 export const project = pgTable(
@@ -116,6 +117,7 @@ export const project = pgTable(
 		width: integer('width'),
 		height: integer('height'),
 		transcript: jsonb('transcript').$type<Word[]>(),
+		creative: jsonb('creative').$type<CreativeBrief>(), // Gemini's creative brief
 		plan: jsonb('plan').$type<EditPlan>(),
 		outputKey: text('output_key'),
 		...timestamps,

@@ -1,24 +1,32 @@
 # Cutline
 
-Upload a raw talking-head clip, describe the edit, and get back a cut, captioned video. Users bring their own AI keys.
+Upload a raw talking-head clip, describe the edit, and get back a cut, captioned, graded video with effects, sound and B-roll. Users bring their own AI keys.
+
+Two AI models do the work. **Gemini** transcribes the recording and watches the video, then writes a creative brief: theme, mood, audience, pacing, palette, caption style, colour grade, VFX, sound effects and B-roll ideas (each suggesting Remotion, HyperFrames or Higgsfield). **Claude** edits from that brief: the cuts and keywords, and exactly which word every effect, sound and B-roll clip lands on. Everything is shown as a **storyboard you approve** before anything is generated or rendered.
 
 ## Video types
 
 | Type | What it makes | Flow |
 | --- | --- | --- |
-| **Kit Student** | ~1 min kids explainer, 1920×1080 @ 25 fps, with the Kokoon cast (Kiko, Sparky, Ohmie, the Zips, Batt, Grandpa Bulb) from `kids-kit/` | transcribe → Claude picks best takes + beat plan → **you review and approve** (live preview) → render |
-| **Talking head** | Short in the clip's own size with one of 14 caption styles | transcribe → Claude plans cuts / keywords / zooms → render; restyle and re-render any time |
+| **Kit Student** | ~1 min kids explainer, 1920×1080 @ 25 fps, with the Kokoon cast (Kiko, Sparky, Ohmie, the Zips, Batt, Grandpa Bulb) from `kids-kit/` | Gemini transcribes + writes the brief → Claude picks best takes, beat plan and sound effects → **storyboard: you approve** (live preview) → render |
+| **Talking head** | Short in the clip's own size: 14 caption styles, 9 colour grades, VFX, sound effects, B-roll | Gemini transcribes + writes the brief → Claude plans cuts, captions, grade, VFX, SFX, B-roll → **storyboard: you approve or adjust** → B-roll generated → render; restyle and re-render any time |
 
 The presenter's recorded voice is never replaced or generated. Takes are only cut.
 
 ## How it works
 
 1. **Sign up / sign in** (email + password; Google optional). Better Auth, sessions in Postgres.
-2. **API keys**: Anthropic (planning) plus OpenAI Whisper or Deepgram (transcription). AES-256-GCM encrypted, never sent back to the browser.
+2. **API keys**: Gemini (transcription + creative brief) and Anthropic (the edit), plus Higgsfield (optional, AI footage B-roll; pasted as `KEY_ID:KEY_SECRET`). AES-256-GCM encrypted, never sent back to the browser.
 3. **Upload**: the browser reads the clip's size and length (MP4/MOV parsed from the container, so HEVC works too), extracts a 16 kHz mono WAV with WebAudio, and uploads both: to the local `storage/` folder on your Mac, or straight to S3 with presigned URLs once S3 is configured.
-4. **Analysis** runs in the background (`after()` in `/api/projects/[id]/start`): transcription, then the variant's planner. Claude only returns word indices; `toPlan()` turns them into time ranges.
-5. **Render**: on your Mac the render worker (`npm run local` starts it) renders with Remotion and saves the MP4 next to the upload. In the cloud setup, Remotion Lambda renders and writes into the S3 bucket instead.
-6. **Playback and downloads** stream from your disk locally (or from short-lived CloudFront / S3 signed URLs in the cloud setup).
+4. **Analysis** runs in the background (`after()` in `/api/projects/[id]/start`):
+   - **Transcription (Gemini)**: the WAV is split into ~75 s chunks at the quietest moment near each boundary and transcribed word by word with timings (Flash model, Pro as fallback). Without a WAV, Gemini listens to the uploaded video.
+   - **Creative brief (Gemini)**: the video goes to the Gemini File API; the newest Pro model watches it with the timed transcript and returns the brief as JSON (`src/server/pipeline/creative.ts`).
+   - **Edit plan (Claude)**: one forced tool call returns cuts, keywords, zooms, hook, caption style, grade, VFX, SFX and B-roll, all as word indices; `toPlan()` and `sanitizeLook()` turn them into safe, timed data. Claude's caption pick replaces the form's style unless the creator turned that off.
+   Each finished step is saved, so retries and re-plans only redo what is missing.
+5. **Storyboard**: the project stops at `review`. The storyboard shows the brief and the edit as panels (real preview frames, what is seen, heard, and every effect). The creator can change the grade or captions, switch any B-roll clip between Remotion / HyperFrames / Higgsfield, remove clips, effects or sounds, or send notes to Claude to revise it. **Nothing is generated or rendered until it's approved.**
+6. **B-roll generation** (after approval, in the render worker): HyperFrames clips are animations Claude writes in HTML + CSS + GSAP, rendered by the HyperFrames CLI inside a page whose Content-Security-Policy blocks all network access; Higgsfield clips are text-to-video (Seedance 2.0 by default, `HIGGSFIELD_MODEL` to change). A clip that fails keeps its Remotion card and the reason shows on the storyboard.
+7. **Render**: on your Mac the render worker (`npm run local` starts it) renders with Remotion and saves the MP4 next to the upload. In the cloud setup, Remotion Lambda renders and writes into the S3 bucket instead.
+8. **Playback and downloads** stream from your disk locally (or from short-lived CloudFront / S3 signed URLs in the cloud setup).
 
 Stack: Next.js 16 · Supabase Postgres (Drizzle) · Remotion. Runs fully on your Mac with local files; can move to Vercel + S3/CloudFront + Remotion Lambda later.
 
@@ -26,7 +34,7 @@ Stack: Next.js 16 · Supabase Postgres (Drizzle) · Remotion. Runs fully on your
 
 Everything runs on your computer: the app, uploads (saved in the `storage/` folder inside the project) and video rendering. Only the database is in the cloud, on Supabase's free plan.
 
-**You need:** [Node.js 20.9 or newer](https://nodejs.org) (or `brew install node`), git, and a free [Supabase](https://supabase.com) account.
+**You need:** [Node.js 22 or newer](https://nodejs.org) (or `brew install node`), [FFmpeg](https://ffmpeg.org) (`brew install ffmpeg`; HyperFrames needs it), git, and a free [Supabase](https://supabase.com) account.
 
 1. **Create the database.** In Supabase, create a new project (any name; pick the Mumbai region and save the database password). When it's ready, click **Connect** and copy the **Transaction pooler** connection string.
 2. **Get the code and set it up** (in Terminal):
@@ -45,11 +53,13 @@ Everything runs on your computer: the app, uploads (saved in the `storage/` fold
    npm run local        # the app and the video renderer together; stop with Ctrl+C
    ```
 
-   Open <http://localhost:3000>, create an account, add your API keys (Anthropic, plus Deepgram or OpenAI), and make a video. The first render downloads a headless Chrome for Remotion (about 100 MB), once.
+   Open <http://localhost:3000>, create an account, add your API keys (Gemini and Anthropic; Higgsfield optional), and make a video. The first render downloads a headless Chrome for Remotion (about 100 MB), once.
 
-To try the whole flow without spending API credits, start with `CUTLINE_FAKE_AI=1 npm run local`. That swaps transcription and planning for canned data, so the captions won't match the speech.
+To try the whole flow without spending API credits, start with `CUTLINE_FAKE_AI=1 npm run local`. That swaps transcription, the brief and the storyboard for canned data, so the captions won't match the speech.
 
 **Free Supabase notes:** 500 MB of database (plenty: videos are on your disk, only text like transcripts and plans goes in the database). Projects **pause after a week without use**; open the Supabase dashboard and click Restore if the app says it can't reach the database.
+
+**Updating from an older version:** run `npm install` and `npm run db:migrate`. The migration deletes saved OpenAI and Deepgram keys (transcription moved to Gemini); add a Gemini key in API keys.
 
 **Other handy commands:** `npm run studio` opens Remotion Studio on the compositions (`CaptionedVideo`, `KidsExplainer`, `StylePreview`); `npm run db:migrate` applies new database changes after pulling updates.
 
@@ -121,7 +131,11 @@ Follow Remotion's Lambda setup to create the IAM role and user: <https://www.rem
 | --- | --- |
 | `src/app/(auth)`, `src/app/(app)` | Pages: sign-in, videos, new video, project (review / result), caption styles, API keys |
 | `src/app/api/projects/[id]/*` | `upload` (presigned S3 PUT, or local PUT), `start`, `status` (polls Lambda renders), `source`, `output` |
-| `src/server/pipeline` | `analyze` (transcribe + plan), `transcribe`, `plan` (talking head), `plan-kids` (Kit Student), `fake` (dev), `render` (local) |
+| `src/server/pipeline` | `analyze` (the pipeline), `gemini` (REST client), `transcribe` (Gemini word timings), `creative` (Gemini brief), `plan` (talking head), `plan-kids` (Kit Student), `fx` (grade / VFX / SFX / B-roll schema + validation), `fake` (dev), `render` (local) |
+| `src/server/broll` | B-roll generation after approval: `hyperframes` (Claude-written GSAP animation, sandboxed render), `higgsfield` (text-to-video) |
+| `src/lib/storyboard.ts` | Splits a plan into storyboard panels |
+| `src/remotion/fx` | Grades, VFX, SFX and B-roll cards (`meta.ts` is the catalogue the AI prompts use; `Look.tsx` draws them) |
+| `public/sfx` | Sound effects, synthesized by `npm run sfx` (no sample licences) |
 | `src/server/render.ts` | Render driver: Remotion Lambda (writes to the bucket) or the local job queue |
 | `src/server/storage.ts` | S3 or local disk behind one interface; presigned uploads, CloudFront signed reads |
 | `src/remotion` | Compositions, caption engine + 14 presets, timeline (cuts → output time) |
@@ -141,4 +155,6 @@ Follow Remotion's Lambda setup to create the IAM role and user: <https://www.rem
 
 - **Big uploads** use a single presigned PUT (S3 allows up to 5 GB; the app caps at 2 GB). Multipart uploads would add resumability for slow connections.
 - **Remotion license**: free for individuals and companies of up to 3 people; larger companies need a [company license](https://www.remotion.dev/license).
+- **Generated B-roll on Lambda**: HyperFrames needs a local Chrome + FFmpeg and Higgsfield polls for minutes, so only the local worker generates clips. With Remotion Lambda, those clips use their Remotion card.
+- **Gemini uploads** read the whole source video into memory before sending it to the File API (2 GB max there). Fine on a Mac; streaming it would help on small servers.
 - **Editorial Behind** places text behind the person only when a person matte exists; without segmentation it draws the big word over the video.

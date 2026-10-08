@@ -8,6 +8,7 @@ import '@fontsource/jetbrains-mono/600.css';
 import React, {useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import {AbsoluteFill, continueRender, delayRender, useCurrentFrame, useVideoConfig} from 'remotion';
 import {SegmentedVideo} from '../compositions';
+import {SfxTrack, resolveLook} from '../fx/Look';
 import {atWordMs, buildSegments, mapWords, outputDurationMs, wordOutTimes} from '../timeline';
 import type {EditPlan, KidsShot, Word} from '../types';
 import {createKit, type Kit, type KitWord} from './kit';
@@ -115,7 +116,7 @@ export const KidsExplainer: React.FC<KidsExplainerProps> = ({src, sourceDuration
 		const durMs = outputDurationMs(segments);
 		const outWords = mapWords(words, segments);
 		const outTimes = wordOutTimes(words, segments);
-		return {segments, durMs, kitWords: toKitWords(outWords), shots: resolveShots(plan?.shots, outTimes, durMs)};
+		return {segments, durMs, kitWords: toKitWords(outWords), shots: resolveShots(plan?.shots, outTimes, durMs), sfx: resolveLook(plan, words, segments).sfx};
 	}, [plan, sourceDurationMs, words]);
 
 	const shot = timeline.shots.find((s) => t >= s.s && t < s.e) ?? timeline.shots[timeline.shots.length - 1];
@@ -158,6 +159,7 @@ export const KidsExplainer: React.FC<KidsExplainerProps> = ({src, sourceDuration
 		<AbsoluteFill style={{background: '#000'}}>
 			<SegmentedVideo segments={timeline.segments} src={src} scaleAt={scaleAt} origin={`50% ${(330 / KIDS_H) * 100}%`} filter={GRADE} preview={preview} />
 			<canvas ref={canvas} width={KIDS_W} height={KIDS_H} style={{position: 'absolute', inset: 0, width: '100%', height: '100%'}} />
+			<SfxTrack sfx={timeline.sfx} />
 		</AbsoluteFill>
 	);
 };

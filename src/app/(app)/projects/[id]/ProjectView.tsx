@@ -1,14 +1,13 @@
 'use client';
 
-import {Player} from '@remotion/player';
 import {useRouter} from 'next/navigation';
-import {useEffect, useMemo, useState, useTransition} from 'react';
-import {StyleEditor} from '@/components/StyleEditor';
-import {CaptionedVideo, captionedVideoDurationMs} from '@/remotion/compositions';
+import {useEffect} from 'react';
+import {getGrade} from '@/remotion/fx/meta';
 import {buildSegments, outputDurationMs} from '@/remotion/timeline';
-import type {CaptionStyleChoice, EditPlan, Word} from '@/remotion/types';
-import {restyleProject, retryProject} from '../actions';
+import type {CaptionStyleChoice, CreativeBrief, EditPlan, Word} from '@/remotion/types';
+import {retryProject} from '../actions';
 import {KidsReview} from './KidsReview';
+import {Storyboard} from './Storyboard';
 
 type P = {
 	id: string;
@@ -25,10 +24,12 @@ type P = {
 	transcript: Word[] | null;
 	plan: EditPlan | null;
 	style: CaptionStyleChoice;
+	creative: CreativeBrief | null;
+	hasHiggsfield: boolean;
 	renderer: 'captioned' | 'kids';
 };
 
-const WORKING = ['queued', 'transcribing', 'planning', 'rendering'];
+const WORKING = ['queued', 'transcribing', 'analyzing', 'planning', 'generating', 'rendering'];
 
 export function ProjectView({project: p}: {project: P}) {
 	const router = useRouter();
@@ -97,11 +98,22 @@ export function ProjectView({project: p}: {project: P}) {
 			)}
 
 			{p.renderer === 'kids' && p.transcript && p.plan && p.durationMs && p.hasSource && (p.status === 'review' || p.status === 'done') && (
-				<KidsReview id={p.id} words={p.transcript} plan={p.plan} durationMs={p.durationMs} mode={p.status === 'review' ? 'review' : 'done'} />
+				<KidsReview id={p.id} words={p.transcript} plan={p.plan} durationMs={p.durationMs} creative={p.creative} mode={p.status === 'review' ? 'review' : 'done'} />
 			)}
 
-			{p.renderer === 'captioned' && p.transcript && p.plan && p.durationMs && p.hasSource && !working && (
-				<Restyle id={p.id} initial={p.style} transcript={p.transcript} plan={p.plan} durationMs={p.durationMs} width={p.width ?? 1080} height={p.height ?? 1920} />
+			{p.renderer === 'captioned' && p.transcript && p.plan && p.durationMs && p.hasSource && !working && p.status !== 'draft' && (
+				<Storyboard
+					id={p.id}
+					words={p.transcript}
+					plan={p.plan}
+					durationMs={p.durationMs}
+					width={p.width ?? 1080}
+					height={p.height ?? 1920}
+					style={p.style}
+					creative={p.creative}
+					hasHiggsfield={p.hasHiggsfield}
+					mode={p.status === 'review' ? 'review' : 'done'}
+				/>
 			)}
 		</div>
 	);
@@ -124,6 +136,22 @@ function PlanSummary({plan, durationMs}: {plan: EditPlan; durationMs: number}) {
 				<dt className="text-muted">Zooms</dt>
 				<dd className="mt-0.5 font-semibold">{plan.zooms.length}</dd>
 			</div>
+			<div>
+				<dt className="text-muted">B-roll</dt>
+				<dd className="mt-0.5 font-semibold">{plan.broll?.length ?? 0}</dd>
+			</div>
+			<div>
+				<dt className="text-muted">Effects / sounds</dt>
+				<dd className="mt-0.5 font-semibold">
+					{plan.vfx?.length ?? 0} / {plan.sfx?.length ?? 0}
+				</dd>
+			</div>
+			{plan.grade && (
+				<div>
+					<dt className="text-muted">Grade</dt>
+					<dd className="mt-0.5 font-semibold">{getGrade(plan.grade).name}</dd>
+				</div>
+			)}
 			{plan.hook && (
 				<div className="col-span-full">
 					<dt className="text-muted">Hook</dt>
@@ -141,71 +169,5 @@ function PlanSummary({plan, durationMs}: {plan: EditPlan; durationMs: number}) {
 				</div>
 			)}
 		</dl>
-	);
-}
-
-function Restyle(props: {id: string; initial: CaptionStyleChoice; transcript: Word[]; plan: EditPlan; durationMs: number; width: number; height: number}) {
-	const [style, setStyle] = useState(props.initial);
-	const [error, setError] = useState<string | null>(null);
-	const [pending, start] = useTransition();
-	const router = useRouter();
-	const changed = JSON.stringify(style) !== JSON.stringify(props.initial);
-	const inputProps = useMemo(
-		() => ({
-			src: `/api/projects/${props.id}/source`,
-			sourceDurationMs: props.durationMs,
-			words: props.transcript,
-			plan: props.plan,
-			style,
-			hookText: props.plan.hook,
-			preview: true,
-		}),
-		[props.id, props.durationMs, props.transcript, props.plan, style],
-	);
-	const frames = Math.max(1, Math.round((captionedVideoDurationMs(inputProps) / 1000) * 30));
-
-	return (
-		<section>
-			<h2 className="h-display text-xl">Change the captions</h2>
-			<p className="mt-1 text-sm text-muted">The preview plays your real video. Re-rendering reuses the transcript and cuts, so it only takes a render.</p>
-			<div className="mt-5">
-				<StyleEditor
-					value={style}
-					onChange={setStyle}
-					preview={
-						<Player
-							component={CaptionedVideo}
-							inputProps={inputProps}
-							durationInFrames={frames}
-							fps={30}
-							compositionWidth={props.width}
-							compositionHeight={props.height}
-							controls
-							loop
-							acknowledgeRemotionLicense
-							style={{width: '100%', aspectRatio: `${props.width} / ${props.height}`, borderRadius: 14, overflow: 'hidden'}}
-						/>
-					}
-				/>
-			</div>
-			<div className="mt-6 flex flex-wrap items-center gap-4">
-				<button
-					type="button"
-					className="btn btn-primary"
-					disabled={!changed || pending}
-					onClick={() =>
-						start(async () => {
-							setError(null);
-							const r = await restyleProject(props.id, style);
-							if (r.error) setError(r.error);
-							else router.refresh();
-						})
-					}
-				>
-					{pending ? 'Starting…' : 'Re-render with this style'}
-				</button>
-				{error && <p role="alert" className="text-sm text-bad">{error}</p>}
-			</div>
-		</section>
 	);
 }

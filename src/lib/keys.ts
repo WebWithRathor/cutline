@@ -4,24 +4,25 @@ import {db, schema} from './db';
 import {decrypt} from '@/server/crypto';
 import type {Provider} from './db/schema';
 
-export const PROVIDER_INFO: Record<Provider, {name: string; use: string; placeholder: string; docs: string}> = {
+export const PROVIDER_INFO: Record<Provider, {name: string; use: string; placeholder: string; docs: string; optional?: boolean}> = {
+	gemini: {
+		name: 'Google Gemini',
+		use: 'Transcribes your recording word by word, then watches the video and writes the creative brief: theme, mood, captions, grade, VFX, sound effects and B-roll ideas.',
+		placeholder: 'AIza…',
+		docs: 'https://aistudio.google.com/app/apikey',
+	},
 	anthropic: {
 		name: 'Anthropic (Claude)',
-		use: 'Plans the edit: what to cut, which words to highlight, where to zoom.',
+		use: 'Edits from the brief: cuts, keywords, captions, and where every effect, sound and B-roll clip lands. Also writes HyperFrames animations.',
 		placeholder: 'sk-ant-…',
 		docs: 'https://console.anthropic.com/settings/keys',
 	},
-	openai: {
-		name: 'OpenAI',
-		use: 'Transcribes speech with word-level timestamps (Whisper).',
-		placeholder: 'sk-…',
-		docs: 'https://platform.openai.com/api-keys',
-	},
-	deepgram: {
-		name: 'Deepgram',
-		use: 'Alternative transcription with word-level timestamps.',
-		placeholder: 'Deepgram API key',
-		docs: 'https://console.deepgram.com/',
+	higgsfield: {
+		name: 'Higgsfield (optional)',
+		use: 'AI-generated B-roll footage. Uses your Higgsfield credits, only for clips you approve. Paste it as KEY_ID:KEY_SECRET.',
+		placeholder: 'key-id:key-secret',
+		docs: 'https://cloud.higgsfield.ai/api-keys',
+		optional: true,
 	},
 };
 
