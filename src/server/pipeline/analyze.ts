@@ -121,7 +121,9 @@ export async function analyzeProject(projectId: string, opts: {notes?: string} =
 				? fakeCreative()
 				: await analyzeCreative({
 						apiKey: gemini!,
-						video: await readBytes(p.sourceKey),
+						cacheKey: p.id,
+						source: storageMode === 'local' ? localPath(p.sourceKey) : await mediaUrl(p.sourceKey, 60 * 30),
+						readOriginal: () => readBytes(p.sourceKey!),
 						mimeType: videoMime(p.sourceKey),
 						durationSec,
 						words: transcript,
@@ -177,7 +179,8 @@ export async function analyzeProject(projectId: string, opts: {notes?: string} =
 		}
 	} catch (e) {
 		console.error(`analyze ${projectId} failed`, e);
-		const error = e instanceof ProviderError ? e.message : 'Something went wrong while planning the edit. Try again.';
+		// unexpected errors still say what happened, so the log is useful without the terminal
+		const error = e instanceof ProviderError ? e.message : `Something went wrong: ${String((e as Error)?.message ?? e).slice(0, 200)}. Try again.`;
 		await t.failRunning(error);
 		await setProject(projectId, {status: 'failed', error});
 	}

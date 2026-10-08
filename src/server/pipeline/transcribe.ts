@@ -69,7 +69,7 @@ export async function ensureModel(report: Report): Promise<string> {
 	return file;
 }
 
-function run(cmd: string, args: string[], onLine: (line: string) => void, timeoutMs: number): Promise<void> {
+export function run(cmd: string, args: string[], onLine: (line: string) => void, timeoutMs: number): Promise<void> {
 	return new Promise((resolve, reject) => {
 		const child = spawn(cmd, args, {stdio: ['ignore', 'pipe', 'pipe']});
 		let tail = '';
