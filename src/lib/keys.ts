@@ -7,7 +7,7 @@ import type {Provider} from './db/schema';
 export const PROVIDER_INFO: Record<Provider, {name: string; use: string; placeholder: string; docs: string; optional?: boolean}> = {
 	gemini: {
 		name: 'Google Gemini',
-		use: 'Transcribes your recording word by word, then watches the video and writes the creative brief: theme, mood, captions, grade, VFX, sound effects and B-roll ideas.',
+		use: 'Watches your video and writes the creative brief: theme, mood, captions, grade, which effects and sounds to use, and B-roll ideas. (Transcription runs free on your computer with Whisper.)',
 		placeholder: 'AIza…',
 		docs: 'https://aistudio.google.com/app/apikey',
 	},

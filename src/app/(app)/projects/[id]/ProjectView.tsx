@@ -1,12 +1,14 @@
 'use client';
 
 import {useRouter} from 'next/navigation';
-import {useEffect} from 'react';
-import {getGrade} from '@/remotion/fx/meta';
+import {useEffect, useState} from 'react';
+import type {Activity} from '@/lib/activity';
+import {getGrade, type BrollMode} from '@/remotion/fx/meta';
 import {buildSegments, outputDurationMs} from '@/remotion/timeline';
 import type {CaptionStyleChoice, CreativeBrief, EditPlan, Word} from '@/remotion/types';
 import {retryProject} from '../actions';
 import {KidsReview} from './KidsReview';
+import {ProcessTimeline} from './ProcessTimeline';
 import {Storyboard} from './Storyboard';
 
 type P = {
@@ -26,6 +28,8 @@ type P = {
 	style: CaptionStyleChoice;
 	creative: CreativeBrief | null;
 	hasHiggsfield: boolean;
+	brollMode: BrollMode;
+	activity: Activity | null;
 	renderer: 'captioned' | 'kids';
 };
 
@@ -35,32 +39,60 @@ export function ProjectView({project: p}: {project: P}) {
 	const router = useRouter();
 	const working = WORKING.includes(p.status);
 
-	// Poll while the worker is busy; refresh the page when the status changes.
+	// polled updates land here; a server refresh (new props) takes over again
+	const [activity, setActivity] = useState(p.activity);
+	const [fromServer, setFromServer] = useState(p.activity);
+	if (fromServer !== p.activity) {
+		setFromServer(p.activity);
+		setActivity(p.activity);
+	}
+
+	// Poll while work is running: the live log updates in place; the page refreshes when the status changes.
 	useEffect(() => {
 		if (!working) return;
 		const iv = setInterval(async () => {
 			const r = await fetch(`/api/projects/${p.id}/status`, {cache: 'no-store'});
 			if (!r.ok) return;
 			const s = await r.json();
-			if (s.status !== p.status || Math.abs(s.progress - p.progress) > 0.04) router.refresh();
-		}, 2500);
+			if (s.activity) setActivity(s.activity);
+			if (s.status !== p.status) router.refresh();
+		}, 1500);
 		return () => clearInterval(iv);
-	}, [working, p.id, p.status, p.progress, router]);
+	}, [working, p.id, p.status, router]);
 
 	return (
 		<div className="mt-8 space-y-10">
-			{working && (
-				<section className="rounded-xl border border-line bg-surface p-5" aria-live="polite">
-					<div className="flex items-center justify-between text-sm">
-						<span className="font-semibold">{p.statusLabel}</span>
-						<span className="text-muted">{Math.round(p.progress * 100)}%</span>
+			{working &&
+				(activity?.steps?.length ? (
+					<div>
+						<ProcessTimeline activity={activity} live />
+						<p className="mt-2 text-sm text-muted">You can leave this page. The edit keeps going.</p>
 					</div>
-					<div className="mt-3 h-2 overflow-hidden rounded-full bg-fog">
-						<div className="h-full rounded-full bg-mark transition-[width] duration-500" style={{width: `${Math.max(4, p.progress * 100)}%`}} />
-					</div>
-					<p className="mt-3 text-sm text-muted">You can leave this page. The edit keeps going.</p>
-				</section>
-			)}
+				) : (
+					<section className="rounded-xl border border-line bg-surface p-5" aria-live="polite">
+						<div className="flex items-center justify-between text-sm">
+							<span className="font-semibold">{p.statusLabel}</span>
+							<span className="text-muted">{Math.round(p.progress * 100)}%</span>
+						</div>
+						<div className="mt-3 h-2 overflow-hidden rounded-full bg-fog">
+							<div className="h-full rounded-full bg-mark transition-[width] duration-500" style={{width: `${Math.max(4, p.progress * 100)}%`}} />
+						</div>
+						<p className="mt-3 text-sm text-muted">You can leave this page. The edit keeps going.</p>
+					</section>
+				))}
+
+			{!working && activity?.steps?.length ? (
+				p.status === 'failed' ? (
+					<ProcessTimeline activity={activity} live={false} />
+				) : (
+					<details className="group rounded-xl border border-line bg-surface">
+						<summary className="cursor-pointer px-5 py-4 text-sm font-semibold">How this video was made: every step and its log</summary>
+						<div className="border-t border-line p-2">
+							<ProcessTimeline activity={activity} live={false} />
+						</div>
+					</details>
+				)
+			) : null}
 
 			{p.status === 'draft' && (
 				<section className="rounded-xl border border-line bg-surface p-5">
@@ -112,6 +144,7 @@ export function ProjectView({project: p}: {project: P}) {
 					style={p.style}
 					creative={p.creative}
 					hasHiggsfield={p.hasHiggsfield}
+					brollMode={p.brollMode}
 					mode={p.status === 'review' ? 'review' : 'done'}
 				/>
 			)}

@@ -58,7 +58,7 @@ export class Gemini {
 	}
 
 	// Resumable upload, then wait until the file is processed (videos take a while).
-	async upload(bytes: Buffer, mimeType: string, displayName: string): Promise<GeminiFile> {
+	async upload(bytes: Buffer, mimeType: string, displayName: string, onWait?: (seconds: number) => void): Promise<GeminiFile> {
 		const start = await fetch(`${BASE}/upload/v1beta/files`, {
 			method: 'POST',
 			headers: this.headers({
@@ -84,6 +84,7 @@ export class Gemini {
 		while (file.state === 'PROCESSING') {
 			if (Date.now() > deadline) throw new ProviderError('Gemini took too long to process the video.');
 			await sleep(3000);
+			onWait?.(Math.round((Date.now() - deadline) / 1000 + 600));
 			const r = await fetch(`${BASE}/v1beta/${file.name}`, {headers: this.headers()});
 			if (!r.ok) throw await failure(r);
 			file = await r.json();

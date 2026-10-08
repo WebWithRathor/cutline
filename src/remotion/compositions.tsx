@@ -5,7 +5,7 @@ import {CaptionProvider} from './captions/engine';
 import {getPreset} from './captions/presets';
 import {SAMPLE_KEYWORDS, SAMPLE_WORDS, SceneBg, Subject} from './DemoScene';
 import {loadAllFonts} from './fonts';
-import {BrollLayer, GradeOverlay, SfxTrack, VfxOverlay, gradeFilter, resolveLook, vfxTransform} from './fx/Look';
+import {BrollLayer, GradeOverlay, RgbSplitFilter, SfxTrack, VfxOverlay, gradeFilter, resolveLook, vfxTransform} from './fx/Look';
 import {buildSegments, mapWords, mapZooms, outputDurationMs} from './timeline';
 import type {CaptionStyleChoice, EditPlan, Word} from './types';
 
@@ -148,7 +148,13 @@ const VfxFootage: React.FC<{look: ReturnType<typeof resolveLook>; children: Reac
 	const frame = useCurrentFrame();
 	const {fps, width} = useVideoConfig();
 	const fx = vfxTransform(look.vfx, (frame / fps) * 1000, width);
-	return <AbsoluteFill style={{transform: fx.transform, filter: fx.filter}}>{children}</AbsoluteFill>;
+	const filter = [fx.filter, fx.rgb ? 'url(#cutline-rgb)' : ''].filter(Boolean).join(' ') || undefined;
+	return (
+		<AbsoluteFill style={{transform: fx.transform, filter}}>
+			{fx.rgb ? <RgbSplitFilter id="cutline-rgb" dx={fx.rgb} /> : null}
+			{children}
+		</AbsoluteFill>
+	);
 };
 
 export const CaptionedVideo: React.FC<CaptionedVideoProps> = ({src, sourceDurationMs, words, plan, style, hookText, palette, brollSrc, preview}) => {
@@ -165,10 +171,11 @@ export const CaptionedVideo: React.FC<CaptionedVideoProps> = ({src, sourceDurati
 					<VfxFootage look={look}>
 						<SegmentedVideo segments={segments} src={src} scaleAt={zoomScale(zooms)} filter={gradeFilter(look.grade)} preview={preview} />
 						<GradeOverlay grade={look.grade} />
+						{/* Without a person matte, the "behind" layer is drawn over the video. */}
+						{Behind ? <Behind /> : null}
+						{/* B-roll sits inside the effects layer so shakes, zooms and RGB splits hit it too */}
+						<BrollLayer broll={look.broll} palette={palette} />
 					</VfxFootage>
-					{/* Without a person matte, the "behind" layer is drawn over the video. */}
-					{Behind ? <Behind /> : null}
-					<BrollLayer broll={look.broll} palette={palette} />
 					<VfxOverlay vfx={look.vfx} />
 					<Front />
 					{hookText ? <Hook text={hookText} /> : null}

@@ -1,176 +1,192 @@
+import {spawn} from 'node:child_process';
+import {createWriteStream, existsSync} from 'node:fs';
+import {access, mkdir, readFile, rename, rm, stat} from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {Readable} from 'node:stream';
+import {pipeline} from 'node:stream/promises';
 import type {Word} from '@/remotion/types';
 import {ProviderError} from './errors';
-import {Gemini, S, type Part} from './gemini';
 
 export {ProviderError};
 
-// ---------- Gemini transcription with word timings ----------
-// The 16 kHz mono WAV from the browser is split into ~75 s chunks at the quietest moment near each
-// boundary, so a cut never lands mid-word and timings stay tight on long recordings.
+// ---------- Transcription: Whisper on this machine (whisper.cpp) ----------
+// Free and private: the audio never leaves the Mac. Install once with `brew install whisper-cpp`;
+// the model is downloaded on first use into ~/.cache/cutline/whisper.
 
-const CHUNK_SEC = 75;
-const SEARCH_SEC = 5;
-const CONCURRENCY = 3;
+export type Report = (message: string, fraction?: number) => void;
 
-const SYSTEM =
-	'You are a verbatim transcriber for a video editor. Transcribe exactly what is spoken, word by word, in the spoken language. ' +
-	'Keep every filler word (um, uh, like), false start, stutter and repeated take: the editor needs them to choose cuts. Never summarize, fix or translate. ' +
-	'Attach punctuation to the word before it. Give each word its start and end time in seconds from the start of this audio, as precisely as you can (two decimals). ' +
-	'Return an empty list if nobody speaks.';
+const MODEL = process.env.WHISPER_MODEL || 'large-v3-turbo';
+const MODEL_URL = (name: string) => `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${name}.bin`;
+const CANDIDATES = ['whisper-cli', 'whisper-cpp', 'whisper'];
+const BREW_DIRS = ['/opt/homebrew/bin', '/usr/local/bin', '/home/linuxbrew/.linuxbrew/bin'];
 
-const SCHEMA = S.obj({
-	words: S.arr(S.obj({w: S.str('the word with its punctuation'), s: S.num('start, seconds'), e: S.num('end, seconds')})),
-});
+export const INSTALL_HINT = 'Install Whisper once with `brew install whisper-cpp` (and FFmpeg: `brew install ffmpeg`), then try again.';
 
-type Wav = {rate: number; samples: Int16Array};
-
-export function parseWav(buf: Buffer): Wav | null {
-	if (buf.length < 44 || buf.toString('ascii', 0, 4) !== 'RIFF' || buf.toString('ascii', 8, 12) !== 'WAVE') return null;
-	let off = 12;
-	let rate = 16000;
-	let bits = 16;
-	let channels = 1;
-	while (off + 8 <= buf.length) {
-		const id = buf.toString('ascii', off, off + 4);
-		const size = buf.readUInt32LE(off + 4);
-		if (id === 'fmt ') {
-			channels = buf.readUInt16LE(off + 10);
-			rate = buf.readUInt32LE(off + 12);
-			bits = buf.readUInt16LE(off + 22);
-		} else if (id === 'data') {
-			if (bits !== 16 || channels !== 1) return null;
-			const end = Math.min(buf.length, off + 8 + size);
-			const copy = Buffer.from(buf.subarray(off + 8, end - ((end - off - 8) % 2)));
-			return {rate, samples: new Int16Array(copy.buffer, copy.byteOffset, copy.length / 2)};
-		}
-		off += 8 + size + (size % 2);
+async function isExecutable(p: string) {
+	try {
+		await access(p, 1);
+		return (await stat(p)).isFile();
+	} catch {
+		return false;
 	}
+}
+
+// WHISPER_CPP_BIN, or whisper-cli on PATH / in Homebrew's bin folders.
+export async function findWhisper(): Promise<string | null> {
+	if (process.env.WHISPER_CPP_BIN) return (await isExecutable(process.env.WHISPER_CPP_BIN)) ? process.env.WHISPER_CPP_BIN : null;
+	const dirs = [...(process.env.PATH ?? '').split(path.delimiter), ...BREW_DIRS].filter(Boolean);
+	for (const name of CANDIDATES) for (const dir of dirs) if (await isExecutable(path.join(dir, name))) return path.join(dir, name);
 	return null;
 }
 
-export function encodeWav({rate, samples}: Wav): Buffer {
-	const b = Buffer.alloc(44 + samples.length * 2);
-	b.write('RIFF', 0, 'ascii');
-	b.writeUInt32LE(36 + samples.length * 2, 4);
-	b.write('WAVEfmt ', 8, 'ascii');
-	b.writeUInt32LE(16, 16);
-	b.writeUInt16LE(1, 20);
-	b.writeUInt16LE(1, 22);
-	b.writeUInt32LE(rate, 24);
-	b.writeUInt32LE(rate * 2, 28);
-	b.writeUInt16LE(2, 32);
-	b.writeUInt16LE(16, 34);
-	b.write('data', 36, 'ascii');
-	b.writeUInt32LE(samples.length * 2, 40);
-	Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength).copy(b, 44);
-	return b;
-}
+export const modelPath = () => process.env.WHISPER_MODEL_PATH || path.join(os.homedir(), '.cache', 'cutline', 'whisper', `ggml-${MODEL}.bin`);
 
-// Chunk boundaries (sample indices), each moved to the quietest 20 ms window within ±5 s of the target.
-export function chunkBounds({rate, samples}: Wav, chunkSec = CHUNK_SEC): number[] {
-	const n = samples.length;
-	const bounds = [0];
-	const win = Math.round(rate * 0.02);
-	let target = rate * chunkSec;
-	while (target < n - rate * 10) {
-		let best = target;
-		let bestE = Infinity;
-		for (let s = Math.max(bounds[bounds.length - 1] + win, target - rate * SEARCH_SEC); s < Math.min(n - win, target + rate * SEARCH_SEC); s += win) {
-			let e = 0;
-			for (let i = s; i < s + win; i++) e += samples[i] * samples[i];
-			if (e < bestE) {
-				bestE = e;
-				best = s + Math.round(win / 2);
-			}
+// Downloads the model once (about 1.6 GB for large-v3-turbo), reporting progress.
+export async function ensureModel(report: Report): Promise<string> {
+	const file = modelPath();
+	if (existsSync(file)) return file;
+	if (process.env.WHISPER_MODEL_PATH) throw new ProviderError(`The Whisper model file ${file} does not exist.`);
+	await mkdir(path.dirname(file), {recursive: true});
+	report(`Downloading the Whisper ${MODEL} model (first run only)`, 0);
+	const res = await fetch(MODEL_URL(MODEL));
+	if (!res.ok || !res.body) throw new ProviderError(`Could not download the Whisper model (${res.status}). Check your internet connection, or set WHISPER_MODEL_PATH to a downloaded ggml model.`);
+	const total = Number(res.headers.get('content-length')) || 0;
+	let got = 0;
+	let lastPct = -1;
+	const part = `${file}.part`;
+	const body = Readable.fromWeb(res.body as import('node:stream/web').ReadableStream).on('data', (c: Buffer) => {
+		got += c.length;
+		const pct = total ? Math.floor((got / total) * 100) : -1;
+		if (pct >= lastPct + 5) {
+			lastPct = pct;
+			report(`Downloading the Whisper model: ${pct}% of ${(total / 1e9).toFixed(1)} GB`, pct / 100);
 		}
-		bounds.push(best);
-		target = best + rate * chunkSec;
-	}
-	bounds.push(n);
-	return bounds;
-}
-
-// Cleans one chunk's words: drops empties, clamps to the chunk, keeps times increasing and non-overlapping.
-export function cleanWords(raw: {w?: unknown; s?: unknown; e?: unknown}[], durSec: number, offsetSec = 0): Word[] {
-	const list = raw
-		.map((r) => ({text: String(r.w ?? '').trim(), s: Number(r.s), e: Number(r.e)}))
-		.filter((r) => r.text && Number.isFinite(r.s))
-		.map((r) => ({...r, s: Math.min(durSec, Math.max(0, r.s)), e: Number.isFinite(r.e) ? Math.min(durSec, Math.max(0, r.e)) : r.s}));
-	const out: Word[] = [];
-	let prev = 0;
-	for (let i = 0; i < list.length; i++) {
-		const s = Math.max(prev, list[i].s);
-		const nextS = i + 1 < list.length ? Math.max(s, list[i + 1].s) : durSec;
-		let e = Math.max(list[i].e, s + 0.06);
-		if (e > nextS && nextS > s) e = nextS;
-		out.push({text: list[i].text, startMs: Math.round((s + offsetSec) * 1000), endMs: Math.round((Math.min(e, durSec) + offsetSec) * 1000)});
-		prev = s;
-	}
-	return out;
-}
-
-async function pool<T, R>(items: T[], limit: number, fn: (t: T, i: number) => Promise<R>): Promise<R[]> {
-	const out: R[] = new Array(items.length);
-	let next = 0;
-	await Promise.all(
-		Array.from({length: Math.min(limit, items.length)}, async () => {
-			while (next < items.length) {
-				const i = next++;
-				out[i] = await fn(items[i], i);
-			}
-		}),
-	);
-	return out;
-}
-
-const keyError = (e: unknown) => e instanceof ProviderError && /rejected your API key|rate-limited/.test(e.message);
-
-// Flash first (fast and cheap); if it fails or returns nothing usable, the Pro model tries once.
-async function transcribePart(g: Gemini, parts: Part[], expectSpeech: boolean): Promise<{w?: unknown; s?: unknown; e?: unknown}[]> {
-	let lastErr: unknown = null;
-	for (const tier of ['flash', 'pro'] as const) {
-		try {
-			const r = await g.json<{words?: {w?: unknown; s?: unknown; e?: unknown}[]}>({model: await g.model(tier), system: SYSTEM, parts, schema: SCHEMA, maxTokens: 32768});
-			const words = r.words ?? [];
-			if (words.length || !expectSpeech || tier === 'pro') return words;
-		} catch (e) {
-			if (keyError(e)) throw e;
-			lastErr = e;
-		}
-	}
-	throw lastErr ?? new ProviderError('Gemini could not transcribe this video.');
-}
-
-const rms = (s: Int16Array) => {
-	let e = 0;
-	for (let i = 0; i < s.length; i += 4) e += s[i] * s[i];
-	return Math.sqrt(e / Math.max(1, s.length / 4));
-};
-
-export async function transcribeGeminiAudio(audio: Buffer, apiKey: string): Promise<Word[]> {
-	const wav = parseWav(audio);
-	if (!wav) throw new ProviderError('The extracted audio is not a 16-bit mono WAV.');
-	const g = new Gemini(apiKey);
-	const bounds = chunkBounds(wav);
-	const chunks = bounds.slice(0, -1).map((a, i) => ({a, b: bounds[i + 1]}));
-	const results = await pool(chunks, CONCURRENCY, async ({a, b}) => {
-		const samples = wav.samples.subarray(a, b);
-		const durSec = samples.length / wav.rate;
-		const data = encodeWav({rate: wav.rate, samples}).toString('base64');
-		const raw = await transcribePart(g, [{inlineData: {mimeType: 'audio/wav', data}}, {text: `Transcribe this ${durSec.toFixed(1)} second audio clip.`}], rms(samples) > 200);
-		return cleanWords(raw, durSec, a / wav.rate);
 	});
-	return results.flat();
+	await pipeline(body, createWriteStream(part));
+	await rename(part, file);
+	report('Whisper model downloaded', 1);
+	return file;
 }
 
-// When the browser could not extract audio, Gemini listens to the uploaded video instead.
-export async function transcribeGeminiVideo(video: Buffer, mimeType: string, durationSec: number, apiKey: string): Promise<Word[]> {
-	const g = new Gemini(apiKey);
-	const file = await g.upload(video, mimeType, 'cutline-source');
+function run(cmd: string, args: string[], onLine: (line: string) => void, timeoutMs: number): Promise<void> {
+	return new Promise((resolve, reject) => {
+		const child = spawn(cmd, args, {stdio: ['ignore', 'pipe', 'pipe']});
+		let tail = '';
+		let buf = '';
+		const feed = (d: Buffer) => {
+			const s = d.toString();
+			tail = (tail + s).slice(-3000);
+			buf += s;
+			const lines = buf.split(/\r?\n|\r/);
+			buf = lines.pop() ?? '';
+			lines.forEach(onLine);
+		};
+		child.stdout.on('data', feed);
+		child.stderr.on('data', feed);
+		const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
+		child.on('error', (e) => {
+			clearTimeout(timer);
+			reject(e);
+		});
+		child.on('close', (code) => {
+			clearTimeout(timer);
+			if (code === 0) resolve();
+			else reject(new Error(`${path.basename(cmd)} exited with ${code}: ${tail.slice(-1200)}`));
+		});
+	});
+}
+
+// 16 kHz mono 16-bit WAV, which whisper.cpp needs. `input` is a local path or a URL ffmpeg can read.
+export async function extractAudio(input: string, out: string) {
 	try {
-		const raw = await transcribePart(g, [{fileData: {fileUri: file.uri, mimeType: file.mimeType}}, {text: `Transcribe the speech in this ${durationSec.toFixed(1)} second video.`}], true);
-		return cleanWords(raw, durationSec);
+		await run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', input, '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', out], () => undefined, 20 * 60 * 1000);
+	} catch (e) {
+		if ((e as NodeJS.ErrnoException).code === 'ENOENT') throw new ProviderError(`FFmpeg is not installed. ${INSTALL_HINT}`);
+		throw new ProviderError('Could not read the audio from this video.');
+	}
+}
+
+type Token = {text?: string; offsets?: {from?: number; to?: number}};
+type WhisperJson = {result?: {language?: string}; transcription?: {offsets?: {from?: number; to?: number}; text?: string; tokens?: Token[]}[]};
+
+// whisper.cpp's full JSON has per-token times (ms). A token starting with a space begins a new word;
+// other tokens (word pieces, punctuation) join the word before. Special tokens ([_BEG_], [_TT_…], <|…|>) are skipped.
+export function wordsFromWhisper(json: WhisperJson): Word[] {
+	const out: Word[] = [];
+	for (const seg of json.transcription ?? []) {
+		let fresh = true;
+		for (const t of seg.tokens ?? []) {
+			const text = t.text ?? '';
+			if (!text || /^\s*(\[_|<\|)/.test(text)) continue;
+			const from = Number(t.offsets?.from);
+			const to = Number(t.offsets?.to);
+			if (!Number.isFinite(from) || !Number.isFinite(to)) continue;
+			const last = out[out.length - 1];
+			const startsWord = fresh || /^\s/.test(text);
+			const trimmed = text.trim();
+			if (!trimmed) continue;
+			// punctuation on its own ("," "?" "—") belongs to the previous word
+			if (startsWord && !/[\p{L}\p{N}]/u.test(trimmed) && last) {
+				last.text += trimmed;
+				last.endMs = Math.max(last.endMs, to);
+			} else if (startsWord || !last) {
+				out.push({text: trimmed, startMs: from, endMs: Math.max(from + 60, to)});
+			} else {
+				last.text += text;
+				last.endMs = Math.max(last.endMs, to);
+			}
+			fresh = false;
+		}
+	}
+	// keep times increasing and non-overlapping
+	for (let i = 1; i < out.length; i++) {
+		if (out[i].startMs < out[i - 1].startMs) out[i].startMs = out[i - 1].startMs;
+		if (out[i - 1].endMs > out[i].startMs) out[i - 1].endMs = Math.max(out[i - 1].startMs + 40, out[i].startMs);
+	}
+	return out.filter((w) => w.text);
+}
+
+// Transcribes a 16 kHz WAV (or anything ffmpeg can read: it is converted first).
+export async function transcribeWhisper(opts: {input: string; isWav: boolean; durationSec: number; report: Report}): Promise<{words: Word[]; language: string; model: string; binary: string}> {
+	const bin = await findWhisper();
+	if (!bin) throw new ProviderError(`Whisper is not installed on this computer. ${INSTALL_HINT}`);
+	const model = await ensureModel(opts.report);
+	const dir = path.join(os.tmpdir(), 'cutline-whisper', `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+	await mkdir(dir, {recursive: true});
+	try {
+		let wav = opts.input;
+		if (!opts.isWav) {
+			opts.report('Extracting the audio with FFmpeg', 0);
+			wav = path.join(dir, 'audio.wav');
+			await extractAudio(opts.input, wav);
+		}
+		const base = path.join(dir, 'out');
+		const threads = Math.max(2, Math.min(8, os.cpus().length - 1));
+		opts.report(`Whisper ${MODEL} is listening (${threads} threads)`, 0);
+		let lastPct = -1;
+		await run(
+			bin,
+			['-m', model, '-f', wav, '-l', process.env.WHISPER_LANGUAGE || 'auto', '-t', String(threads), '-ojf', '-of', base, '-pp'],
+			(line) => {
+				const m = /progress\s*=\s*(\d+)%/.exec(line);
+				if (!m) return;
+				const pct = Number(m[1]);
+				if (pct >= lastPct + 10 || pct === 100) {
+					lastPct = pct;
+					opts.report(`Transcribing: ${pct}%`, pct / 100);
+				}
+			},
+			// about 10x real time is slow even on an old Intel Mac
+			Math.max(10 * 60 * 1000, opts.durationSec * 10 * 1000),
+		).catch((e) => {
+			if ((e as NodeJS.ErrnoException).code === 'ENOENT') throw new ProviderError(`Whisper is not installed on this computer. ${INSTALL_HINT}`);
+			console.error('whisper failed', e);
+			throw new ProviderError('Whisper could not transcribe this audio. Try again, or check the terminal for details.');
+		});
+		const json = JSON.parse(await readFile(`${base}.json`, 'utf8')) as WhisperJson;
+		return {words: wordsFromWhisper(json), language: json.result?.language ?? 'unknown', model: MODEL, binary: bin};
 	} finally {
-		await g.remove(file);
+		await rm(dir, {recursive: true, force: true});
 	}
 }

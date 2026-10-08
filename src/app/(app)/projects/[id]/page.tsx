@@ -2,6 +2,7 @@ import type {Metadata} from 'next';
 import {notFound} from 'next/navigation';
 import {requireUser} from '@/lib/auth';
 import {listKeys} from '@/lib/keys';
+import {brollModeOf} from '@/remotion/fx/meta';
 import {STATUS_LABEL, getOwnedProject} from '@/lib/projects';
 import {getVariant} from '@/variants';
 import {deleteProject} from '../actions';
@@ -54,6 +55,8 @@ export default async function ProjectPage(props: PageProps<'/projects/[id]'>) {
 					style: p.captionStyle,
 					creative: p.creative ?? null,
 					hasHiggsfield,
+					brollMode: brollModeOf(p.brief.broll),
+					activity: p.activity ?? null,
 					renderer: variant?.renderer ?? 'captioned',
 				}}
 			/>

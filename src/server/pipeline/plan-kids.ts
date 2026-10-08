@@ -230,6 +230,6 @@ export async function planKids(opts: {apiKey: string; words: Word[]; guidance: s
 	});
 	const base = toPlan(raw, opts.words, SILENCE_MS[opts.pacing] ?? SILENCE_MS.natural);
 	const removed = new Set(base.removed?.flatMap((r) => Array.from({length: r.to - r.from + 1}, (_, k) => r.from + k)) ?? []);
-	const {sfx} = sanitizeLook({sfx: raw.sfx}, opts.words, removed, {brollMode: 'none', higgsfield: false});
+	const {sfx} = sanitizeLook({sfx: raw.sfx}, opts.words, removed, {brollMode: 'none'});
 	return {...base, zooms: [], hook: undefined, shots: sanitizeShots(raw.shots, opts.words.length), sfx};
 }

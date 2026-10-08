@@ -7,7 +7,7 @@ import {StyleEditor} from '@/components/StyleEditor';
 import {buildStoryboard, fmtTime, type Panel} from '@/lib/storyboard';
 import {getPresetMeta} from '@/remotion/captions/meta';
 import {CaptionedVideo, captionedVideoDurationMs, type CaptionedVideoProps} from '@/remotion/compositions';
-import {BROLL_META, GRADES, SFX_META, VFX_META} from '@/remotion/fx/meta';
+import {BROLL_META, BROLL_MODE_META, GRADES, SFX_META, VFX_META, type BrollMode} from '@/remotion/fx/meta';
 import {BROLL_SOURCES, type BrollSource, type CaptionStyleChoice, type CreativeBrief, type EditPlan, type GradeId, type Word} from '@/remotion/types';
 import {approvePlan, editStoryboard, replanProject, restyleProject} from '../actions';
 import {CreativeBriefCard} from './CreativeBriefCard';
@@ -24,6 +24,7 @@ type Props = {
 	style: CaptionStyleChoice;
 	creative: CreativeBrief | null;
 	hasHiggsfield: boolean;
+	brollMode: BrollMode;
 	mode: 'review' | 'done';
 };
 
@@ -175,6 +176,7 @@ function PanelCard({
 	width,
 	height,
 	hasHiggsfield,
+	brollMode,
 	mode,
 	inputProps,
 	frames,
@@ -230,7 +232,7 @@ function PanelCard({
 										disabled={pending}
 										onChange={(e) => act(`src-${b.id}`, () => editStoryboard(id, {kind: 'brollSource', cueId: b.id, source: e.target.value as BrollSource}))}
 									>
-										{BROLL_SOURCES.map((s) => (
+										{BROLL_MODE_META[brollMode].sources.map((s) => (
 											<option key={s} value={s} disabled={s === 'higgsfield' && !hasHiggsfield}>
 												{BROLL_META[s].name} ({BROLL_META[s].cost})
 											</option>

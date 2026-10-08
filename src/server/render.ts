@@ -4,6 +4,7 @@ import {db, schema} from '@/lib/db';
 import type {CaptionedVideoProps} from '@/remotion/compositions';
 import type {KidsExplainerProps} from '@/remotion/kids/KidsExplainer';
 import {getVariant} from '@/variants';
+import {track} from './activity';
 import {needsGeneration} from './broll';
 import {mediaUrl, removeKey, s3Bucket, storageMode} from './storage';
 
@@ -84,6 +85,7 @@ export async function startRender(projectId: string) {
 		maxRetries: 2,
 	});
 	await setProject(projectId, {status: 'rendering', progress: 0.04, error: null, renderId, renderBucket: bucketName});
+	await track(projectId).start('render', 'Rendering on Remotion Lambda (AWS)');
 }
 
 // Lambda renders run on their own; the status endpoint calls this to advance them.
@@ -94,10 +96,14 @@ export async function pollRender(p: Project) {
 	if (pr.fatalErrorEncountered) {
 		console.error('lambda render failed', p.renderId, pr.errors.slice(0, 3));
 		await setProject(p.id, {status: 'failed', error: `The render failed: ${pr.errors[0]?.message?.slice(0, 200) ?? 'unknown error'}`, renderId: null, renderBucket: null});
+		await track(p.id).fail('render', 'Remotion Lambda reported an error');
 	} else if (pr.done && pr.outKey) {
 		if (p.outputKey && p.outputKey !== pr.outKey) await removeKey(p.outputKey);
 		await setProject(p.id, {status: 'done', progress: 1, outputKey: pr.outKey, renderId: null, renderBucket: null});
+		await track(p.id).done('render', 'MP4 ready');
 	} else {
-		await setProject(p.id, {progress: Math.max(0.04, Math.min(0.99, pr.overallProgress))});
+		const progress = Math.max(0.04, Math.min(0.99, pr.overallProgress));
+		if (Math.floor(progress * 10) > Math.floor(p.progress * 10)) await track(p.id).log('render', `Rendering frames on Lambda: ${Math.round(progress * 100)}%`, progress);
+		await setProject(p.id, {progress});
 	}
 }

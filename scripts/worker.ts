@@ -2,12 +2,13 @@
 // Transcription and planning run inside the web app; this process only renders queued jobs.
 // Run alongside the web app:  npm run worker
 import {randomUUID} from 'node:crypto';
-import {mkdir, rm} from 'node:fs/promises';
+import {mkdir, rm, stat} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {and, asc, eq, lt} from 'drizzle-orm';
 import {db, schema} from '@/lib/db';
-import {generateBroll} from '@/server/broll';
+import {track} from '@/server/activity';
+import {generateBroll, needsGeneration} from '@/server/broll';
 import {getServeUrl, renderComposition} from '@/server/pipeline/render';
 import {renderInput} from '@/server/render';
 import {putFile, removeKey} from '@/server/storage';
@@ -52,21 +53,53 @@ async function claim() {
 }
 
 async function runJob(job: typeof schema.job.$inferSelect) {
+	const t = track(job.projectId);
+	const [before] = await db.select({plan: schema.project.plan}).from(schema.project).where(eq(schema.project.id, job.projectId));
 	// the storyboard was approved: first make the HyperFrames / Higgsfield clips it asked for
-	await generateBroll(job.projectId, (done, total) => {
-		log(`b-roll ${done}/${total} for ${job.projectId}`);
-		void setProject(job.projectId, done < total ? {status: 'generating', progress: 0.02 + 0.3 * (done / total)} : {status: 'rendering', progress: 0.04});
-	});
+	const todo = needsGeneration(before?.plan).length;
+	if (todo) {
+		await t.start('broll', `Making ${todo} B-roll clip${todo > 1 ? 's' : ''}`);
+		await generateBroll(
+			job.projectId,
+			(done, total) => void setProject(job.projectId, {status: 'generating', progress: 0.02 + 0.3 * (done / total)}),
+			(msg) => void t.log('broll', msg),
+		);
+		const [after] = await db.select({plan: schema.project.plan}).from(schema.project).where(eq(schema.project.id, job.projectId));
+		const failed = (after?.plan?.broll ?? []).filter((b) => b.error && b.source !== 'remotion').length;
+		await t.done('broll', failed ? `${todo - failed} made, ${failed} fell back to cards` : `${todo} clip${todo > 1 ? 's' : ''} made`);
+	} else if (before?.plan?.broll?.length) {
+		await t.done('broll', 'Built-in cards only, nothing to generate');
+	}
 	const [p] = await db.select().from(schema.project).where(eq(schema.project.id, job.projectId));
 	if (!p) return;
+	await setProject(p.id, {status: 'rendering', progress: 0.04});
 	const {compositionId, inputProps} = await renderInput(p);
+	await t.start('render', `Rendering ${compositionId} on this computer`);
 	const outKey = `projects/${p.id}/output-${randomUUID().slice(0, 8)}.mp4`;
 	const tmpDir = path.join(os.tmpdir(), 'cutline-render');
 	await mkdir(tmpDir, {recursive: true});
 	const tmp = path.join(tmpDir, `${p.id}-${Date.now()}.mp4`);
+	const started = Date.now();
+	let lastPct = -1;
+	const writeProgress = progressWriter(p.id);
 	try {
-		await renderComposition({compositionId, inputProps, outputPath: tmp, onProgress: progressWriter(p.id)});
+		await renderComposition({
+			compositionId,
+			inputProps,
+			outputPath: tmp,
+			onProgress: (pr) => {
+				writeProgress(pr);
+				const pct = Math.floor(pr * 100);
+				if (pct >= lastPct + 10) {
+					lastPct = pct;
+					void t.log('render', `Rendering frames: ${pct}%`, pr);
+				}
+			},
+		});
+		await t.log('render', 'Saving the MP4');
 		await putFile(outKey, tmp, 'video/mp4');
+		const size = (await stat(tmp)).size;
+		await t.done('render', `MP4 ready (${(size / 1e6).toFixed(1)} MB) in ${Math.round((Date.now() - started) / 1000)} s`);
 	} finally {
 		await rm(tmp, {force: true});
 	}
@@ -99,7 +132,11 @@ async function loop() {
 				.update(schema.job)
 				.set({status: retry ? 'queued' : 'failed', error: String(e instanceof Error ? (e.stack ?? e.message) : e).slice(0, 2000)})
 				.where(eq(schema.job.id, job.id));
-			if (!retry) await setProject(job.projectId, {status: 'failed', error: 'The render failed. Try again.'});
+			if (retry) await track(job.projectId).log('render', 'The render failed; trying once more');
+			else {
+				await track(job.projectId).failRunning('The render failed. Try again.');
+				await setProject(job.projectId, {status: 'failed', error: 'The render failed. Try again.'});
+			}
 		}
 	}
 }

@@ -72,6 +72,76 @@ const SOUNDS = {
 		const hp = x - lowpass(s, 'l', x, 1500 + 4000 * (t / d));
 		return hp * Math.sin(Math.PI * (t / d)) * 0.9;
 	}),
+	// swells in and stops dead on the word (played 0.62 s early)
+	'reverse-whoosh': render(0.66, (t, _i, s, d) => {
+		const u = t / d;
+		const cutoff = 300 + 6000 * u * u;
+		const tail = u > 0.94 ? Math.exp(-(u - 0.94) * 120) : 1;
+		return (lowpass(s, 'a', noise(), cutoff) - lowpass(s, 'b', noise() * 0.2, 160)) * u ** 2.2 * tail * 1.8;
+	}),
+	notification: render(0.75, (t) => {
+		const note = (f, at) => (t < at ? 0 : (Math.sin(2 * Math.PI * f * (t - at)) * 0.6 + Math.sin(2 * Math.PI * f * 2 * (t - at)) * 0.15) * env(t - at, 0.004, 0.16));
+		return note(880, 0) + note(1318.5, 0.13);
+	}),
+	// heavy sub hit with a short echo tail
+	boom: render(1.8, (t, _i, s) => {
+		s.ph = (s.ph ?? 0) + (2 * Math.PI * (42 + 80 * Math.exp(-t / 0.07))) / RATE;
+		const hit = (tt) => (tt < 0 ? 0 : Math.exp(-tt / 0.55));
+		const body = Math.sin(s.ph) * (hit(t) + 0.35 * hit(t - 0.21) + 0.12 * hit(t - 0.42));
+		const thump = lowpass(s, 'n', noise(), 900) * Math.exp(-t / 0.025);
+		return Math.tanh((body * 1.6 + thump * 1.2) * 1.8) * 0.95;
+	}),
+	'bass-drop': render(1.4, (t, _i, s) => {
+		const f = 30 + 110 * Math.exp(-t / 0.35);
+		s.ph = (s.ph ?? 0) + (2 * Math.PI * f) / RATE;
+		return Math.tanh(Math.sin(s.ph) * 2.2) * env(t, 0.01, 0.7) * 0.9;
+	}),
+	shutter: render(0.22, (t, _i, s) => {
+		const burst = (at, len) => (t >= at && t < at + len ? Math.exp(-(t - at) / (len / 4)) : 0);
+		const n = noise();
+		return (n - lowpass(s, 'l', n, 2500)) * (burst(0, 0.03) + 0.8 * burst(0.085, 0.045)) * 1.4;
+	}),
+	typing: render(0.8, (t, _i, s) => {
+		s.next ??= 0;
+		if (t >= s.next) {
+			s.at = t;
+			s.next = t + 0.06 + rand() * 0.07;
+			s.f = 1800 + rand() * 1600;
+		}
+		const k = t - s.at;
+		const n = noise();
+		return ((n - lowpass(s, 'l', n, 1200)) * 0.7 + Math.sin(2 * Math.PI * s.f * k) * 0.3) * Math.exp(-k / 0.008);
+	}),
+	cash: render(1.1, (t, _i, s) => {
+		const drawer = lowpass(s, 'd', noise(), 3000) * Math.exp(-t / 0.04) * 0.8;
+		const at = 0.07;
+		const k = t - at;
+		const bell = k < 0 ? 0 : [2093, 2637, 3322, 4186].reduce((a, f, i) => a + Math.sin(2 * Math.PI * f * k * (1 + i * 0.003)) / (i + 1.5), 0) * env(k, 0.002, 0.3);
+		return drawer + bell * 0.7;
+	}),
+	heartbeat: render(1.3, (t, _i, s) => {
+		const thump = (at, g) => (t < at ? 0 : Math.sin(2 * Math.PI * 52 * (t - at)) * Math.exp(-(t - at) / 0.07) * g);
+		const x = thump(0, 1) + thump(0.24, 0.7) + thump(0.78, 0.9) + thump(1.02, 0.6);
+		return lowpass(s, 'l', x, 240) * 2.2;
+	}),
+	'record-scratch': render(0.55, (t, _i, s) => {
+		const wobble = 0.5 + 0.5 * Math.sin(2 * Math.PI * (9 + 10 * t) * t);
+		const band = lowpass(s, 'a', noise(), 400 + 2600 * wobble) - lowpass(s, 'b', noise(), 250);
+		return band * (1 - t / 0.55) * 1.8;
+	}),
+	tick: render(0.62, (t) => {
+		const tk = (at, f) => (t < at ? 0 : Math.sin(2 * Math.PI * f * (t - at)) * Math.exp(-(t - at) / 0.012));
+		return tk(0, 2400) + tk(0.5, 1900);
+	}),
+	boing: render(0.7, (t, _i, s) => {
+		const f = 160 + 180 * Math.exp(-t / 0.18) + 40 * Math.sin(2 * Math.PI * 16 * t) * Math.exp(-t / 0.3);
+		s.ph = (s.ph ?? 0) + (2 * Math.PI * f) / RATE;
+		return Math.sin(s.ph) * env(t, 0.005, 0.25) * 0.9;
+	}),
+	sparkle: render(1.0, (t, _i, s) => {
+		s.notes ??= Array.from({length: 11}, (_, i) => ({at: i * 0.06 + rand() * 0.03, f: 2600 + rand() * 3400}));
+		return s.notes.reduce((a, n) => a + (t < n.at ? 0 : Math.sin(2 * Math.PI * n.f * (t - n.at)) * Math.exp(-(t - n.at) / 0.12)), 0) * 0.35 * (1 - t);
+	}),
 };
 
 function wav(samples) {

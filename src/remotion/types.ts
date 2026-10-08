@@ -32,10 +32,10 @@ export type EditPlan = {
 export const GRADE_IDS = ['natural', 'warm-film', 'teal-orange', 'clean-bright', 'moody', 'vintage', 'mono', 'punchy', 'pastel'] as const;
 export type GradeId = (typeof GRADE_IDS)[number];
 
-export const VFX_TYPES = ['flash', 'shake', 'light-leak', 'glitch', 'whip', 'punch-zoom'] as const;
+export const VFX_TYPES = ['flash', 'shake', 'light-leak', 'glitch', 'whip', 'punch-zoom', 'zoom-blur', 'film-burn', 'rgb-split', 'slow-zoom', 'focus-pull', 'flicker', 'vhs', 'spin', 'swipe', 'letterbox'] as const;
 export type VfxType = (typeof VFX_TYPES)[number];
 
-export const SFX_IDS = ['whoosh', 'pop', 'click', 'ding', 'riser', 'impact', 'glitch', 'swipe'] as const;
+export const SFX_IDS = ['whoosh', 'reverse-whoosh', 'swipe', 'pop', 'click', 'ding', 'notification', 'riser', 'impact', 'boom', 'bass-drop', 'glitch', 'shutter', 'typing', 'cash', 'heartbeat', 'record-scratch', 'tick', 'boing', 'sparkle'] as const;
 export type SfxId = (typeof SFX_IDS)[number];
 
 export const BROLL_SOURCES = ['remotion', 'hyperframes', 'higgsfield'] as const;

@@ -28,7 +28,7 @@ const videoUrl = (s: Status) => s.video?.url ?? s.videos?.[0]?.url ?? (Array.isA
 
 export const aspectFor = (w: number, h: number) => (w / h < 0.8 ? '9:16' : w / h > 1.25 ? '16:9' : '1:1');
 
-export async function generateClip(opts: {apiKey: string; prompt: string; seconds: number; aspect: string; signal?: AbortSignal}): Promise<string> {
+export async function generateClip(opts: {apiKey: string; prompt: string; seconds: number; aspect: string; signal?: AbortSignal; onStatus?: (status: string, seconds: number) => void}): Promise<string> {
 	const headers = {Authorization: `Key ${opts.apiKey}`, 'Content-Type': 'application/json', Accept: 'application/json'};
 	const res = await fetch(`${BASE}/${MODEL}`, {
 		method: 'POST',
@@ -39,7 +39,8 @@ export async function generateClip(opts: {apiKey: string; prompt: string; second
 	if (!res.ok) throw await failure(res);
 	let s = (await res.json()) as Status;
 	const statusUrl = s.status_url ?? (s.request_id ? `${BASE}/requests/${s.request_id}/status` : null);
-	const deadline = Date.now() + 15 * 60 * 1000;
+	const started = Date.now();
+	const deadline = started + 15 * 60 * 1000;
 	while (!videoUrl(s) || !['completed', 'COMPLETED', undefined].includes(s.status)) {
 		if (s.status && /fail|nsfw|cancel/i.test(s.status)) throw new ProviderError(`Higgsfield could not make this clip (${s.status}${s.error ? `: ${s.error.slice(0, 120)}` : ''}).`);
 		if (!statusUrl) throw new ProviderError('Higgsfield returned no request id.');
@@ -48,6 +49,7 @@ export async function generateClip(opts: {apiKey: string; prompt: string; second
 		const r = await fetch(statusUrl, {headers, signal: opts.signal});
 		if (!r.ok) throw await failure(r);
 		s = await r.json();
+		opts.onStatus?.(s.status ?? 'working', Math.round((Date.now() - started) / 1000));
 	}
 	return videoUrl(s)!;
 }

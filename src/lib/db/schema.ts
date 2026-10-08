@@ -1,4 +1,5 @@
 import {boolean, doublePrecision, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex} from 'drizzle-orm/pg-core';
+import type {Activity} from '@/lib/activity';
 import type {CaptionStyleChoice, CreativeBrief, EditPlan, Word} from '@/remotion/types';
 
 // Postgres (Supabase). Only the server talks to the database (as the table owner, which bypasses RLS).
@@ -118,6 +119,7 @@ export const project = pgTable(
 		height: integer('height'),
 		transcript: jsonb('transcript').$type<Word[]>(),
 		creative: jsonb('creative').$type<CreativeBrief>(), // Gemini's creative brief
+		activity: jsonb('activity').$type<Activity>(), // live processing log shown on the project page
 		plan: jsonb('plan').$type<EditPlan>(),
 		outputKey: text('output_key'),
 		...timestamps,

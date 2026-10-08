@@ -46,23 +46,27 @@ async function download(url: string, file: string) {
 	await pipeline(Readable.fromWeb(res.body as import('node:stream/web').ReadableStream), createWriteStream(file));
 }
 
-async function makeClip(p: Project, cue: BrollCue, seconds: number, dir: string): Promise<string> {
+async function makeClip(p: Project, cue: BrollCue, seconds: number, dir: string, say: (msg: string) => void): Promise<string> {
 	if (cue.source === 'hyperframes') {
 		const apiKey = await key(p.userId, 'anthropic');
 		if (!apiKey) throw new ProviderError('Add an Anthropic key in API keys.');
 		const size = clipSize(p);
+		say(`${cue.id}: Claude is writing a ${seconds.toFixed(1)} s HyperFrames animation`);
 		const animation = await writeAnimation({apiKey, cue, seconds, ...size, creative: p.creative ?? null});
+		say(`${cue.id}: HyperFrames is rendering it at ${size.width}×${size.height}`);
 		return renderAnimation(animation, {dir, seconds, ...size, palette: p.creative?.palette ?? ['#111111', '#FFFFFF', '#FFD43B']});
 	}
 	const apiKey = await key(p.userId, 'higgsfield');
 	if (!apiKey) throw new ProviderError('Add a Higgsfield key in API keys.');
-	const url = await generateClip({apiKey, prompt: cue.prompt ?? cue.card.title, seconds, aspect: aspectFor(p.width ?? 1080, p.height ?? 1920)});
+	say(`${cue.id}: sending the prompt to Higgsfield`);
+	const url = await generateClip({apiKey, prompt: cue.prompt ?? cue.card.title, seconds, aspect: aspectFor(p.width ?? 1080, p.height ?? 1920), onStatus: (st, sec) => say(`${cue.id}: Higgsfield ${st.replace(/_/g, ' ')} (${sec} s)`)});
 	const file = path.join(dir, 'higgsfield.mp4');
+	say(`${cue.id}: downloading the clip`);
 	await download(url, file);
 	return file;
 }
 
-export async function generateBroll(projectId: string, onProgress: (done: number, total: number) => void = () => undefined) {
+export async function generateBroll(projectId: string, onProgress: (done: number, total: number) => void = () => undefined, say: (msg: string) => void = () => undefined) {
 	const [p] = await db.select().from(schema.project).where(eq(schema.project.id, projectId));
 	if (!p?.plan || !p.transcript) return;
 	const todo = needsGeneration(p.plan);
@@ -77,13 +81,15 @@ export async function generateBroll(projectId: string, onProgress: (done: number
 		await mkdir(dir, {recursive: true});
 		let patch: Partial<BrollCue>;
 		try {
-			const file = await makeClip(p, cue, seconds, dir);
+			const file = await makeClip(p, cue, seconds, dir, say);
 			const assetKey = `projects/${projectId}/broll/${cue.id}-${randomUUID().slice(0, 8)}.mp4`;
 			await putFile(assetKey, file, 'video/mp4');
 			patch = {assetKey, error: undefined};
+			say(`${cue.id}: ready`);
 		} catch (e) {
 			console.error(`b-roll ${cue.id} (${cue.source}) for ${projectId} failed`, e);
 			patch = {error: e instanceof ProviderError ? e.message : `${cue.source === 'hyperframes' ? 'HyperFrames' : 'Higgsfield'} could not make this clip.`};
+			say(`${cue.id}: failed (${patch.error}); its Remotion card will be used`);
 		} finally {
 			await rm(dir, {recursive: true, force: true});
 		}
