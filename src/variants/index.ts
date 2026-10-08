@@ -13,6 +13,12 @@ export type Variant = {
 	description: string;
 	fields: Field[];
 	defaultPresetId: string;
+	// 'captioned' = talking head with a caption preset; 'kids' = the kids-edit-kit composition (its own captions)
+	renderer: 'captioned' | 'kids';
+	// pause after planning so the creator approves the takes and beat plan before rendering
+	review: boolean;
+	output: string; // shown in the UI
+
 	// Appended to the planner prompt together with the user's answers.
 	plannerGuidance: (brief: Record<string, unknown>) => string;
 };
@@ -40,34 +46,43 @@ export const VARIANTS: Variant[] = [
 	{
 		id: 'kit-student',
 		name: 'Kit Student',
-		description: 'Short explainer for students: clear captions, key terms highlighted, calm pacing.',
-		defaultPresetId: 'smooth-rise',
+		description: 'Kids explainer with the Kokoon cast: best takes, gold keyword captions, and cutaways where Kiko, Sparky, Ohmie, the Zips and Batt act out each idea.',
+		defaultPresetId: 'dynamic-minimal',
+		renderer: 'kids',
+		review: true,
+		output: '1920×1080, 25 fps, about a minute',
 		fields: [
-			{type: 'text', name: 'topic', label: 'Topic', placeholder: 'e.g. How photosynthesis works', required: true},
+			{type: 'text', name: 'topic', label: 'Topic', placeholder: 'e.g. How an LED works', required: true},
 			{
 				type: 'select',
-				name: 'level',
-				label: 'Student level',
-				default: 'middle',
+				name: 'age',
+				label: 'Audience',
+				default: '8-11',
 				options: [
-					{value: 'primary', label: 'Primary school'},
-					{value: 'middle', label: 'Middle school'},
-					{value: 'high', label: 'High school'},
-					{value: 'college', label: 'College'},
+					{value: '5-7', label: 'Ages 5–7'},
+					{value: '8-11', label: 'Ages 8–11'},
+					{value: '12-14', label: 'Ages 12–14'},
 				],
 			},
-			{type: 'textarea', name: 'keyTerms', label: 'Key terms to highlight', placeholder: 'chlorophyll, glucose, sunlight', hint: 'Comma separated. These always get the accent style.'},
-			{...PACING, default: 'natural'} as Field,
-			{type: 'toggle', name: 'hook', label: 'Add a title card in the first 2 seconds', default: true},
+			{type: 'textarea', name: 'keyTerms', label: 'Key terms', placeholder: 'LED, current, resistor', hint: 'Comma separated. Shown in gold in the captions when spoken.'},
+			{type: 'text', name: 'nextVideo', label: 'Next video', placeholder: 'e.g. How resistors work', hint: 'Adds a next-video card at the end with Kiko.'},
+			{
+				type: 'select',
+				name: 'pacing',
+				label: 'Cutting',
+				default: 'natural',
+				options: [
+					{value: 'natural', label: 'Natural: keep breathing room, remove long pauses'},
+					{value: 'tight', label: 'Tight: remove pauses, filler words and slips'},
+				],
+			},
 		],
 		plannerGuidance: (b) =>
 			[
-				`This is an educational explainer for ${String(b.level ?? 'middle')}-level students about "${String(b.topic ?? '')}".`,
-				'Prioritize clarity over speed: never cut mid-explanation, keep pauses after a new concept is introduced.',
-				b.keyTerms ? `Always include these key terms in keywords when spoken: ${String(b.keyTerms)}.` : '',
-				'Highlight subject-specific vocabulary and numbers. Avoid highlighting filler or generic words.',
-				pacingGuidance(b.pacing),
-				b.hook ? 'Write a hook: a short title (max 6 words) that states what the student will learn.' : 'Do not write a hook.',
+				`Topic: "${String(b.topic ?? '')}". Audience: ages ${String(b.age ?? '8-11')}.`,
+				b.keyTerms ? `Key terms (always gold in captions when spoken): ${String(b.keyTerms)}.` : '',
+				b.nextVideo ? `End with a Next time card about: ${String(b.nextVideo)}.` : 'Only add a Next time card if the presenter mentions the next video.',
+				b.pacing === 'tight' ? 'Cut pauses over ~0.5s plus filler words and slips.' : 'Keep natural breathing room; only cut pauses over ~1.2s, false starts and repeated takes.',
 			]
 				.filter(Boolean)
 				.join('\n'),
@@ -77,6 +92,9 @@ export const VARIANTS: Variant[] = [
 		name: 'Talking head',
 		description: 'Creator-style short: tight cuts, punchy captions, keywords that pop.',
 		defaultPresetId: 'dynamic-minimal',
+		renderer: 'captioned',
+		review: false,
+		output: 'Same size as your clip',
 		fields: [
 			{type: 'textarea', name: 'goal', label: 'What is this video for?', placeholder: 'e.g. Promote my new course to beginner editors'},
 			PACING,

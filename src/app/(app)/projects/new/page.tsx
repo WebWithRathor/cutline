@@ -2,6 +2,7 @@ import type {Metadata} from 'next';
 import Link from 'next/link';
 import {requireUser} from '@/lib/auth';
 import {listKeys} from '@/lib/keys';
+import {storageMode} from '@/server/storage';
 import {VARIANTS} from '@/variants';
 import {NewProjectForm} from './NewProjectForm';
 
@@ -12,7 +13,7 @@ export default async function NewProjectPage() {
 	const keys = new Set((await listKeys(user.id)).map((k) => k.provider));
 	const ready = keys.has('anthropic') && (keys.has('openai') || keys.has('deepgram'));
 	// functions can't cross to the client; send only the form definition
-	const variants = VARIANTS.map(({id, name, description, fields, defaultPresetId}) => ({id, name, description, fields, defaultPresetId}));
+	const variants = VARIANTS.map((v) => ({id: v.id, name: v.name, description: v.description, fields: v.fields, defaultPresetId: v.defaultPresetId, renderer: v.renderer, review: v.review, output: v.output}));
 	return (
 		<div className="max-w-5xl">
 			<h1 className="h-display text-3xl">New video</h1>
@@ -23,7 +24,7 @@ export default async function NewProjectPage() {
 					<Link href="/settings/keys" className="btn btn-primary mt-4">Add API keys</Link>
 				</div>
 			)}
-			<NewProjectForm variants={variants} disabled={!ready} />
+			<NewProjectForm variants={variants} disabled={!ready} storage={storageMode} />
 		</div>
 	);
 }

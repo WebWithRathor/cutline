@@ -4,12 +4,15 @@ import {randomUUID} from 'node:crypto';
 import {and, eq} from 'drizzle-orm';
 import {revalidatePath} from 'next/cache';
 import {redirect} from 'next/navigation';
+import {after} from 'next/server';
 import {z} from 'zod';
 import {requireUser} from '@/lib/auth';
 import {db, schema} from '@/lib/db';
 import {listKeys} from '@/lib/keys';
-import {enqueue, getOwnedProject} from '@/lib/projects';
-import {storage} from '@/lib/storage';
+import {getOwnedProject} from '@/lib/projects';
+import {analyzeProject} from '@/server/pipeline/analyze';
+import {startRender} from '@/server/render';
+import {removePrefix} from '@/server/storage';
 import {PRESET_META as PRESETS} from '@/remotion/captions/meta';
 import {getVariant} from '@/variants';
 
@@ -73,7 +76,41 @@ export async function restyleProject(id: string, style: z.input<typeof StyleSche
 	if (!p.transcript || !p.plan) return {error: 'Wait for the first edit to finish.'};
 	if (!['done', 'failed'].includes(p.status)) return {error: 'This video is still being edited.'};
 	await db.update(schema.project).set({captionStyle: parsed.data}).where(eq(schema.project.id, id));
-	await enqueue(id, 'render');
+	return startOrFail(id);
+}
+
+async function startOrFail(id: string): Promise<{error?: string}> {
+	try {
+		await startRender(id);
+	} catch (e) {
+		console.error('start render', e);
+		await db.update(schema.project).set({status: 'failed', error: 'The render could not start. Try again.'}).where(eq(schema.project.id, id));
+		return {error: 'The render could not start. Try again.'};
+	} finally {
+		revalidatePath(`/projects/${id}`);
+	}
+	return {};
+}
+
+// Kit Student: the creator approved the takes and beat plan.
+export async function approvePlan(id: string): Promise<{error?: string}> {
+	const user = await requireUser();
+	const p = await getOwnedProject(user.id, id);
+	if (!p) return {error: 'Project not found.'};
+	if (p.status !== 'review' || !p.plan) return {error: 'There is no plan waiting for approval.'};
+	return startOrFail(id);
+}
+
+// Plan again, taking the creator's notes into account. Keeps the transcript.
+export async function replanProject(id: string, notes: string): Promise<{error?: string}> {
+	const user = await requireUser();
+	const p = await getOwnedProject(user.id, id);
+	if (!p) return {error: 'Project not found.'};
+	if (!['review', 'done', 'failed'].includes(p.status) || !p.transcript) return {error: 'Wait for the transcript first.'};
+	const clean = notes.trim().slice(0, 2000);
+	if (!clean) return {error: 'Write what you want changed.'};
+	await db.update(schema.project).set({status: 'planning', progress: 0.28, error: null}).where(eq(schema.project.id, id));
+	after(() => analyzeProject(id, {notes: clean}));
 	revalidatePath(`/projects/${id}`);
 	return {};
 }
@@ -82,7 +119,12 @@ export async function retryProject(id: string) {
 	const user = await requireUser();
 	const p = await getOwnedProject(user.id, id);
 	if (!p?.sourceKey || p.status !== 'failed') return;
-	await enqueue(id, p.transcript && p.plan ? 'render' : 'full');
+	if (p.transcript && p.plan) {
+		await startOrFail(id);
+		return;
+	}
+	await db.update(schema.project).set({status: 'queued', progress: 0.02, error: null}).where(eq(schema.project.id, id));
+	after(() => analyzeProject(id));
 	revalidatePath(`/projects/${id}`);
 }
 
@@ -92,7 +134,7 @@ export async function deleteProject(form: FormData) {
 	const p = await getOwnedProject(user.id, id);
 	if (!p) return;
 	await db.delete(schema.project).where(and(eq(schema.project.id, id), eq(schema.project.userId, user.id)));
-	await storage.removePrefix(`projects/${id}`);
+	await removePrefix(`projects/${id}`).catch((e) => console.error('delete files', e));
 	revalidatePath('/dashboard');
 	redirect('/dashboard');
 }

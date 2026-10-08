@@ -6,6 +6,9 @@ import {getVariant} from '@/variants';
 import {deleteProject} from '../actions';
 import {ProjectView} from './ProjectView';
 
+// approving / re-planning start background work from server actions on this page
+export const maxDuration = 300;
+
 export async function generateMetadata(props: PageProps<'/projects/[id]'>): Promise<Metadata> {
 	const user = await requireUser();
 	const p = await getOwnedProject(user.id, (await props.params).id);
@@ -17,13 +20,14 @@ export default async function ProjectPage(props: PageProps<'/projects/[id]'>) {
 	const {id} = await props.params;
 	const p = await getOwnedProject(user.id, id);
 	if (!p) notFound();
+	const variant = getVariant(p.variantId);
 
 	return (
 		<div className="max-w-5xl">
 			<div className="flex flex-wrap items-start justify-between gap-4">
 				<div className="min-w-0">
 					<h1 className="h-display truncate text-3xl">{p.title}</h1>
-					<p className="mt-1 text-sm text-muted">{[getVariant(p.variantId)?.name, p.sourceName].filter(Boolean).join(', ')}</p>
+					<p className="mt-1 text-sm text-muted">{[variant?.name, p.sourceName].filter(Boolean).join(', ')}</p>
 				</div>
 				<form action={deleteProject}>
 					<input type="hidden" name="id" value={p.id} />
@@ -46,6 +50,7 @@ export default async function ProjectPage(props: PageProps<'/projects/[id]'>) {
 					transcript: p.transcript ?? null,
 					plan: p.plan ?? null,
 					style: p.captionStyle,
+					renderer: variant?.renderer ?? 'captioned',
 				}}
 			/>
 		</div>

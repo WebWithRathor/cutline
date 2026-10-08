@@ -1,4 +1,3 @@
-import {readFile} from 'node:fs/promises';
 import type {Word} from '@/remotion/types';
 
 export class ProviderError extends Error {}
@@ -12,12 +11,12 @@ async function failure(res: Response, name: string) {
 	return new ProviderError(`${name} transcription failed (${res.status}). ${body.slice(0, 200)}`);
 }
 
-// ---------- Deepgram: punctuated words with timestamps in one call ----------
-export async function transcribeDeepgram(audioPath: string, apiKey: string): Promise<Word[]> {
+// ---------- Deepgram: punctuated words with timestamps in one call. Takes audio bytes or a URL it can fetch. ----------
+export async function transcribeDeepgram(input: {audio: Buffer} | {url: string}, apiKey: string): Promise<Word[]> {
 	const res = await fetch('https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&punctuate=true&detect_language=true', {
 		method: 'POST',
-		headers: {Authorization: `Token ${apiKey}`, 'Content-Type': 'audio/mpeg'},
-		body: await readFile(audioPath),
+		headers: {Authorization: `Token ${apiKey}`, 'Content-Type': 'audio' in input ? 'audio/wav' : 'application/json'},
+		body: 'audio' in input ? new Uint8Array(input.audio) : JSON.stringify({url: input.url}),
 	});
 	if (!res.ok) throw await failure(res, 'Deepgram');
 	const j = (await res.json()) as {
@@ -28,9 +27,10 @@ export async function transcribeDeepgram(audioPath: string, apiKey: string): Pro
 }
 
 // ---------- OpenAI Whisper: word timestamps come without punctuation, so we borrow it from segment text ----------
-export async function transcribeOpenAI(audioPath: string, apiKey: string): Promise<Word[]> {
+export async function transcribeOpenAI(audio: Buffer, apiKey: string): Promise<Word[]> {
+	if (audio.length > 25 * 1024 * 1024) throw new ProviderError('This clip is too long for OpenAI transcription (25 MB audio limit, about 13 minutes). Add a Deepgram key or upload a shorter clip.');
 	const form = new FormData();
-	form.append('file', new Blob([await readFile(audioPath)], {type: 'audio/mpeg'}), 'audio.mp3');
+	form.append('file', new Blob([new Uint8Array(audio)], {type: 'audio/wav'}), 'audio.wav');
 	form.append('model', 'whisper-1');
 	form.append('response_format', 'verbose_json');
 	form.append('timestamp_granularities[]', 'word');

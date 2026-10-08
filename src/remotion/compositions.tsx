@@ -56,20 +56,21 @@ export type CaptionedVideoProps = {
 	preview?: boolean; // in-browser preview: show a notice instead of throwing if the browser can't decode the clip
 };
 
-const ZoomedVideo: React.FC<{segments: ReturnType<typeof buildSegments>; src: string; zooms: EditPlan['zooms']; preview?: boolean}> = ({segments, src, zooms, preview}) => {
+export type Segments = ReturnType<typeof buildSegments>;
+
+// The source video cut into kept segments, laid end to end. scaleAt(ms) drives punch-in zooms.
+export const SegmentedVideo: React.FC<{
+	segments: Segments;
+	src: string;
+	scaleAt: (tMs: number) => number;
+	origin?: string;
+	filter?: string;
+	preview?: boolean;
+}> = ({segments, src, scaleAt, origin = '50% 38%', filter, preview}) => {
 	const frame = useCurrentFrame();
 	const [unplayable, setUnplayable] = useState(false);
 	const {fps} = useVideoConfig();
-	const t = (frame / fps) * 1000;
-	// gentle punch-in: ease up over 250ms, hold, ease back over 300ms
-	let scale = 1;
-	for (const z of zooms) {
-		const k = interpolate(t, [z.atMs, z.atMs + 250, z.atMs + z.durationMs, z.atMs + z.durationMs + 300], [0, 1, 1, 0], {
-			extrapolateLeft: 'clamp',
-			extrapolateRight: 'clamp',
-		});
-		scale = Math.max(scale, 1 + (z.scale - 1) * k);
-	}
+	const scale = scaleAt((frame / fps) * 1000);
 	if (unplayable) {
 		return (
 			<AbsoluteFill style={{alignItems: 'center', justifyContent: 'center', background: '#1b2130', color: '#cfd8e3', fontFamily: 'Inter', fontSize: 34, padding: 80, textAlign: 'center', lineHeight: 1.4}}>
@@ -78,7 +79,7 @@ const ZoomedVideo: React.FC<{segments: ReturnType<typeof buildSegments>; src: st
 		);
 	}
 	return (
-		<AbsoluteFill style={{transform: `scale(${scale})`, transformOrigin: '50% 38%'}}>
+		<AbsoluteFill style={{transform: `scale(${scale})`, transformOrigin: origin, filter}}>
 			{segments.map((s) => {
 				const from = Math.round((s.outStartMs / 1000) * fps);
 				const dur = Math.max(1, Math.round(((s.srcEndMs - s.srcStartMs) / 1000) * fps));
@@ -87,6 +88,8 @@ const ZoomedVideo: React.FC<{segments: ReturnType<typeof buildSegments>; src: st
 						<OffthreadVideo
 							src={src}
 							trimBefore={Math.round((s.srcStartMs / 1000) * fps)}
+							// soften each join so cuts don't click
+							volume={(f) => (f === 0 || f === dur - 1 ? 0.35 : 1)}
 							style={{width: '100%', height: '100%', objectFit: 'cover'}}
 							onError={preview ? () => setUnplayable(true) : undefined}
 						/>
@@ -95,6 +98,19 @@ const ZoomedVideo: React.FC<{segments: ReturnType<typeof buildSegments>; src: st
 			})}
 		</AbsoluteFill>
 	);
+};
+
+// gentle punch-in: ease up over 250ms, hold, ease back over 300ms
+const zoomScale = (zooms: EditPlan['zooms']) => (t: number) => {
+	let scale = 1;
+	for (const z of zooms) {
+		const k = interpolate(t, [z.atMs, z.atMs + 250, z.atMs + z.durationMs, z.atMs + z.durationMs + 300], [0, 1, 1, 0], {
+			extrapolateLeft: 'clamp',
+			extrapolateRight: 'clamp',
+		});
+		scale = Math.max(scale, 1 + (z.scale - 1) * k);
+	}
+	return scale;
 };
 
 const Hook: React.FC<{text: string}> = ({text}) => {
@@ -134,7 +150,7 @@ export const CaptionedVideo: React.FC<CaptionedVideoProps> = ({src, sourceDurati
 		<FontGate>
 			<CaptionProvider words={outWords} keywords={plan?.keywords ?? []} overrides={style.overrides}>
 				<AbsoluteFill style={{background: '#000'}}>
-					<ZoomedVideo segments={segments} src={src} zooms={zooms} preview={preview} />
+					<SegmentedVideo segments={segments} src={src} scaleAt={zoomScale(zooms)} preview={preview} />
 					{/* Without a person matte, the "behind" layer is drawn over the video. */}
 					{Behind ? <Behind /> : null}
 					<Front />

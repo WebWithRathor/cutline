@@ -8,6 +8,7 @@ import {CaptionedVideo, captionedVideoDurationMs} from '@/remotion/compositions'
 import {buildSegments, outputDurationMs} from '@/remotion/timeline';
 import type {CaptionStyleChoice, EditPlan, Word} from '@/remotion/types';
 import {restyleProject, retryProject} from '../actions';
+import {KidsReview} from './KidsReview';
 
 type P = {
 	id: string;
@@ -24,6 +25,7 @@ type P = {
 	transcript: Word[] | null;
 	plan: EditPlan | null;
 	style: CaptionStyleChoice;
+	renderer: 'captioned' | 'kids';
 };
 
 const WORKING = ['queued', 'transcribing', 'planning', 'rendering'];
@@ -77,24 +79,28 @@ export function ProjectView({project: p}: {project: P}) {
 			)}
 
 			{p.hasOutput && (
-				<section className="grid gap-8 md:grid-cols-[minmax(0,320px)_1fr]">
+				<section className={`grid gap-8 ${p.renderer === 'kids' ? 'md:grid-cols-[minmax(0,560px)_1fr]' : 'md:grid-cols-[minmax(0,320px)_1fr]'}`}>
 					<video
 						key={p.outputVersion}
 						src={`/api/projects/${p.id}/output?v=${p.outputVersion}`}
 						controls
 						playsInline
 						className="w-full rounded-xl bg-ink"
-						style={{aspectRatio: p.width && p.height ? `${p.width} / ${p.height}` : '9 / 16'}}
+						style={{aspectRatio: p.renderer === 'kids' ? '16 / 9' : p.width && p.height ? `${p.width} / ${p.height}` : '9 / 16'}}
 					/>
 					<div>
 						<h2 className="h-display text-xl">Your edit</h2>
-						{p.plan && p.durationMs && <PlanSummary plan={p.plan} durationMs={p.durationMs} />}
+						{p.plan && p.durationMs && p.renderer === 'captioned' && <PlanSummary plan={p.plan} durationMs={p.durationMs} />}
 						<a href={`/api/projects/${p.id}/output?download`} className="btn btn-primary mt-6">Download MP4</a>
 					</div>
 				</section>
 			)}
 
-			{p.transcript && p.plan && p.durationMs && p.hasSource && !working && (
+			{p.renderer === 'kids' && p.transcript && p.plan && p.durationMs && p.hasSource && (p.status === 'review' || p.status === 'done') && (
+				<KidsReview id={p.id} words={p.transcript} plan={p.plan} durationMs={p.durationMs} mode={p.status === 'review' ? 'review' : 'done'} />
+			)}
+
+			{p.renderer === 'captioned' && p.transcript && p.plan && p.durationMs && p.hasSource && !working && (
 				<Restyle id={p.id} initial={p.style} transcript={p.transcript} plan={p.plan} durationMs={p.durationMs} width={p.width ?? 1080} height={p.height ?? 1920} />
 			)}
 		</div>

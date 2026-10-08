@@ -1,6 +1,6 @@
 import {getSession} from '@/lib/auth';
 import {getOwnedProject} from '@/lib/projects';
-import {fileResponse} from '@/lib/storage';
+import {serveFile} from '@/server/storage';
 
 export async function GET(request: Request, ctx: RouteContext<'/api/projects/[id]/output'>) {
 	const session = await getSession();
@@ -10,5 +10,5 @@ export async function GET(request: Request, ctx: RouteContext<'/api/projects/[id
 	if (!project?.outputKey) return new Response('Not found', {status: 404});
 	const download = new URL(request.url).searchParams.has('download');
 	const name = `${project.title.replace(/[^\w\- ]+/g, '').trim() || 'cutline'}.mp4`;
-	return fileResponse(project.outputKey, request, 'video/mp4', download ? name : undefined);
+	return serveFile(project.outputKey, request, 'video/mp4', download ? name : undefined);
 }

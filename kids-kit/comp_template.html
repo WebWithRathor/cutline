@@ -1,0 +1,99 @@
+<!doctype html><html><head><meta charset="utf-8"><style>/*FONTS*/ body{margin:0;background:#000} canvas{display:block}</style></head><body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<script>
+/* Kids-explainer composition template.
+   Copy to WORKDIR/comp.html, then edit only the SHOT LIST at the bottom (and add cutaways for the topic).
+   render.py injects fonts, prims.js, props.js, characters.js, the words (window.__words) and duration. */
+const W = 1920, H = 1080;
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const DISPLAY = '"Bricolage Grotesque", Inter, sans-serif', HAND = 'Caveat, cursive', MONO = '"JetBrains Mono", monospace';
+const C = { paper: '#F7DEB9', grid: 'rgba(196,140,70,.22)', ink: '#1E1A16', gold: '#F2A93B', goldD: '#D9861C', purple: '#8E6CF0', purpleD: '#6D4BD8', lav: '#DCCBFF', mint: '#B8EFA0', lemon: '#FBE586', pink: '#FFB0C4', sky: '#A9DCF7', white: '#FFFDF8', coral: '#FF6B5B', grass: '#A7D36B', cyan: '#38BDF8', grey: '#CFC6B8', red: '#E8473B' };
+const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+const ease = x => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+const back = x => { const c1 = 2.2, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); };
+const p = (t, a, b, f = ease) => f(clamp((t - a) / (b - a)));
+const pop = (t, at, d = .45) => p(t, at, at + d, back);
+const lerp = (a, b, k) => a + (b - a) * k;
+const TAU = Math.PI * 2;
+function talking() { return 0; }
+/*PRIMS*/
+/*PROPS*/
+/*CHARS*/
+
+/* ---------- word clock: T('word', line, nth) = when that word is spoken ---------- */
+const WORDS = window.__words, DUR = window.__dur;
+function T(needle, line, n = 0) {
+  const hits = WORDS.filter(w => w.line === line && w.w.toLowerCase().replace(/[^a-z0-9']/g, '') === needle.toLowerCase());
+  const h = hits[Math.min(n, hits.length - 1)]; if (!h) throw new Error('word not found: ' + needle + ' L' + line); return h.s;
+}
+
+/* ---------- ready-made beats (see the storyboard doc's recipe) ---------- */
+const BEAT = {
+  // Camera: Kiko pops in the corner and says hi
+  hello(t, at, text = 'Hi!') { kiko(1640, 1075, .78, { mood: t < at + 2 ? 'happy' : 'talk', arm: 'up', t, s: pop(t, at), look: [-.6, -.3] }); bubble(1500, 470, text, { size: 40, tail: [60, 70], s: pop(t, at + .25) }); },
+  // Camera: Kiko holds up a sign ("2 RULES", "3 STEPS")
+  count(t, at, sign) { kiko(1640, 1075, .74, { mood: 'talk', sign, t, s: pop(t, at) }); },
+  // Camera: sticker words beside the head
+  stickers(t, list) { list.forEach(([at, until, label, fill, y]) => chip(1480, y, label, fill, { size: 54, rot: y % 2 ? .04 : -.05, s: pop(t, at) * (1 - p(t, until - .2, until)) })); },
+  // Camera: next-video card with Kiko and a guest
+  nextTime(t, at, title, sub, guest) {
+    kiko(1520, 1075, .7, { mood: 'cheer', arm: 'cheer', t, s: pop(t, at + .2) }); if (guest) guest(t, pop(t, at + .35));
+    const k = pop(t, at, .6); if (k <= 0) return;
+    ctx.save(); ctx.translate(1580, 330); ctx.rotate(.03); ctx.scale(k, k); sticker(() => rr(-300, -130, 600, 260, 24), C.paper, { sh: 10, lw: 6 });
+    txt('Next video', 0, -70, { size: 50, font: HAND, weight: 700 }); txt(title, 0, 20, { size: 66, color: C.gold, stroke: 10 }); txt(sub, 0, 88, { size: 40, font: HAND, weight: 700 }); ctx.restore();
+  },
+  // Cutaway: right way vs wrong way (draw functions receive (x, ok))
+  doDont(t, s0, label, tOk, tBad, draw) { paper(t, 0); tag(t, s0, label); draw(t, 560, true, pop(t, s0 + .1)); tick(830, 270, pop(t, tOk) * .8); draw(t, 1380, false, pop(t, tBad - .1)); cross(1660, 270, pop(t, tBad + .1) * .8); },
+  // Cutaway: three cards, too much / just right / too little — always end on just right
+  justRight(t, s0, label, tMuch, tLittle, tEnd, draw) {
+    paper(t, 1); tag(t, s0, label);
+    const cols = [[340, 'too much', C.sky, tMuch], [960, 'just right', C.mint, tEnd], [1580, 'too little', C.coral, tLittle]];
+    cols.forEach(([x, lab, col, at], i) => { const on = t >= at; sticker(() => rr(x - 290, 170, 580, 620, 24), on ? C.white : '#F3E2C6', { sh: on ? 7 : 0, lw: on ? 5 : 3 }); if (on) draw(t, x, i, pop(t, at)); chip(x, 830, lab, col, { size: 40, s: pop(t, s0 + .2 + i * .1) }); });
+  },
+};
+
+/* ---------- camera, captions, wipes ---------- */
+const img = new Image();
+async function cameraFrame(i, z) { img.src = `__FRAMES__/f_${String(i + 1).padStart(5, '0')}.jpg`; await img.decode(); const ax = 960, ay = 330; ctx.drawImage(img, ax - ax / z, ay - ay / z, W / z, H / z, 0, 0, W, H); }
+const isKey = w => (window.__keywords || []).includes(w.toLowerCase().replace(/[^a-z0-9]/g, ''));
+const GROUPS = (() => { const out = []; let cur = []; WORDS.forEach((w, i) => { cur.push(w); const nx = WORDS[i + 1]; if (w.brk || !nx || nx.line !== w.line) { out.push(cur); cur = []; } }); return out.flatMap(ph => { const n = Math.ceil(ph.length / 5), sz = Math.ceil(ph.length / n), r = []; for (let i = 0; i < ph.length; i += sz) r.push(ph.slice(i, i + sz)); return r; }); })();
+function captions(t) {
+  const gi = GROUPS.findIndex((g, i) => t >= g[0].s - .08 && t < Math.min((GROUPS[i + 1]?.[0].s ?? 1e9) - .08, g[g.length - 1].e + .5)); if (gi < 0) return;
+  const items = GROUPS[gi].map(w => { const k = isKey(w.w); const size = k ? 70 : 54; return { w, k, size, wd: measure(w.w, size) }; });
+  const sp = 24, total = items.reduce((a, b) => a + b.wd, 0) + sp * (items.length - 1); let x = W / 2 - total / 2;
+  items.forEach(it => { if (t >= it.w.s - .05) { const k = pop(t, it.w.s - .05, .28); ctx.save(); ctx.translate(x + it.wd / 2, 990); ctx.scale(k, k); ctx.rotate(it.k ? -.03 : 0);
+    txt(it.w.w, 0, 0, { size: it.size, color: it.k ? C.gold : C.white, stroke: it.k ? 11 : 8 });
+    if (it.k) { const u = p(t, it.w.s, it.w.e + .1); ctx.lineWidth = 6; ctx.strokeStyle = C.ink; ctx.lineCap = 'round'; ctx.beginPath(); for (let i = 0; i <= 30 * u; i++) { const q = i / 30; i ? ctx.lineTo(-it.wd / 2 + q * it.wd, 42 + Math.sin(q * 6) * 4) : ctx.moveTo(-it.wd / 2, 42); } ctx.stroke(); }
+    ctx.restore(); } x += it.wd + sp; });
+}
+function wipe(t, b, dir) {
+  const u = (t - (b - .3)) / .6; if (u <= 0 || u >= 1) return;
+  const cx = dir > 0 ? lerp(-1500, W + 1500, ease(u)) : lerp(W + 1500, -1500, ease(u)), half = 1250;
+  ctx.save(); ctx.beginPath(); ctx.moveTo(cx - half, -20);
+  for (let y = -20; y <= H + 20; y += 40) ctx.lineTo(cx + half + Math.sin(y / 90 + u * 6) * 50, y);
+  for (let y = H + 20; y >= -20; y -= 40) ctx.lineTo(cx - half + Math.sin(y / 80 + u * 5) * 50, y);
+  ctx.closePath(); ctx.fillStyle = C.gold; ctx.fill(); ctx.lineWidth = 8; ctx.strokeStyle = C.ink; ctx.stroke(); sparkle(cx, H / 2, 90, { rot: u * 4 }); ctx.restore();
+}
+
+/* =====================================================================
+   SHOT LIST — the only part written per video.
+   { k:'A', s, z:[zoomStart, zoomEnd], over:(t)=>{…} }   camera shot with optional overlays (BEAT.hello / count / stickers / nextTime)
+   { k:'C', s, draw:(t, s0, e0)=>{…} }                    cutaway drawn with the cast + props
+   Times come from T('word', line). Alternate A and C; something new every 3–6 s.
+   ===================================================================== */
+const SHOTS = [
+  { k: 'A', s: 0, z: [1.0, 1.05], over: t => BEAT.hello(t, .3, "Hi! Let's learn!") },
+];
+SHOTS.forEach((sh, i) => sh.e = i + 1 < SHOTS.length ? SHOTS[i + 1].s : DUR);
+
+async function frame(i, fps) {
+  const t = i / fps; ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.setLineDash([]);
+  const sh = SHOTS.find(s => t >= s.s && t < s.e) || SHOTS[SHOTS.length - 1];
+  if (sh.k === 'A') { await cameraFrame(i, lerp(sh.z[0], sh.z[1], (t - sh.s) / (sh.e - sh.s))); sh.over && sh.over(t); }
+  else sh.draw(t, sh.s, sh.e);
+  captions(t);
+  SHOTS.forEach((s, k) => { if (k) wipe(t, s.s, k % 2 ? 1 : -1); });
+  if (t > DUR - .45) { ctx.fillStyle = `rgba(0,0,0,${p(t, DUR - .45, DUR)})`; ctx.fillRect(0, 0, W, H); }
+}
+window.__frame = frame;
+</script></body></html>

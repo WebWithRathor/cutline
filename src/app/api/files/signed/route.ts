@@ -1,11 +1,10 @@
-import {fileResponse, verifySignedFile} from '@/lib/storage';
+import {localFileResponse, storageMode, verifySignedFile} from '@/server/storage';
 
-// Media access for the render worker via short-lived HMAC-signed URLs (no user session involved).
+// Development media access for the local renderer via short-lived HMAC-signed URLs.
 export async function GET(request: Request) {
+	if (storageMode !== 'local') return new Response('Not found', {status: 404});
 	const u = new URL(request.url);
 	const key = u.searchParams.get('key') ?? '';
-	if (!verifySignedFile(key, u.searchParams.get('exp') ?? '', u.searchParams.get('sig') ?? '')) {
-		return new Response('Forbidden', {status: 403});
-	}
-	return fileResponse(key, request, 'video/mp4');
+	if (!verifySignedFile(key, u.searchParams.get('exp') ?? '', u.searchParams.get('sig') ?? '')) return new Response('Forbidden', {status: 403});
+	return localFileResponse(key, request, key.endsWith('.wav') ? 'audio/wav' : 'video/mp4');
 }

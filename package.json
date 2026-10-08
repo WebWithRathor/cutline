@@ -11,7 +11,10 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "studio": "remotion studio src/remotion/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "vercel-build": "drizzle-kit migrate && next build && tsx scripts/create-snapshot.ts",
+    "sync-kit": "node scripts/sync-kit.mjs",
+    "bundle": "remotion bundle src/remotion/index.ts --out-dir .remotion"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.132.0",
@@ -21,9 +24,12 @@
     "@fontsource/anton": "^5.3.0",
     "@fontsource/archivo-black": "^5.3.0",
     "@fontsource/bodoni-moda": "^5.3.0",
+    "@fontsource/bricolage-grotesque": "^5.3.0",
+    "@fontsource/caveat": "^5.3.0",
     "@fontsource/dm-serif-display": "^5.3.0",
     "@fontsource/fraunces": "^5.3.0",
     "@fontsource/inter": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
     "@fontsource/montserrat": "^5.3.0",
     "@fontsource/plus-jakarta-sans": "^5.3.0",
     "@fontsource/poppins": "^5.3.0",
@@ -33,14 +39,18 @@
     "@remotion/captions": "4.0.534",
     "@remotion/player": "4.0.534",
     "@remotion/renderer": "4.0.534",
+    "@remotion/vercel": "^4.0.534",
+    "@vercel/blob": "^2.8.1",
+    "@vercel/sandbox": "1.6.0",
     "better-auth": "^1.7.7",
     "drizzle-orm": "^0.45.3",
+    "mp4box": "^0.5.4",
     "next": "16.4.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "remotion": "4.0.534",
     "server-only": "^0.0.1",
-    "zod": "^4.6.5"
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@remotion/cli": "4.0.534",

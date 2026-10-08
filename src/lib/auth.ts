@@ -12,7 +12,14 @@ const google =
 		? {google: {clientId: process.env.GOOGLE_CLIENT_ID, clientSecret: process.env.GOOGLE_CLIENT_SECRET}}
 		: undefined;
 
+const baseURL =
+	process.env.BETTER_AUTH_URL ??
+	(process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined);
+
 export const auth = betterAuth({
+	baseURL,
+	// preview deployments get their own URLs
+	trustedOrigins: process.env.VERCEL_URL ? [`https://${process.env.VERCEL_URL}`] : undefined,
 	database: drizzleAdapter(db, {
 		provider: 'sqlite',
 		schema: {user: schema.user, session: schema.session, account: schema.account, verification: schema.verification},

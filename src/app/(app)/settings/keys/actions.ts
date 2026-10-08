@@ -5,7 +5,7 @@ import {and, eq} from 'drizzle-orm';
 import {revalidatePath} from 'next/cache';
 import {z} from 'zod';
 import {requireUser} from '@/lib/auth';
-import {encrypt} from '@/lib/crypto';
+import {encrypt} from '@/server/crypto';
 import {db, schema} from '@/lib/db';
 import {PROVIDERS} from '@/lib/db/schema';
 

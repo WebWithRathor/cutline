@@ -1,5 +1,6 @@
 import React from 'react';
 import {Composition} from 'remotion';
+import {KIDS_FPS, KIDS_H, KIDS_W, KidsExplainer, kidsDurationMs, type KidsExplainerProps} from './kids/KidsExplainer';
 import {CaptionedVideo, StylePreview, captionedVideoDurationMs, type CaptionedVideoProps, type StylePreviewProps} from './compositions';
 
 export const FPS = 30;
@@ -28,6 +29,16 @@ export const RemotionRoot: React.FC = () => (
 				width: (props as CaptionedVideoProps & {width?: number}).width ?? 1080,
 				height: (props as CaptionedVideoProps & {height?: number}).height ?? 1920,
 			})}
+		/>
+		<Composition
+			id="KidsExplainer"
+			component={KidsExplainer}
+			fps={KIDS_FPS}
+			width={KIDS_W}
+			height={KIDS_H}
+			durationInFrames={250}
+			defaultProps={{src: '', sourceDurationMs: 10000, words: [], plan: null} satisfies KidsExplainerProps}
+			calculateMetadata={({props}) => ({durationInFrames: Math.max(1, Math.round((kidsDurationMs(props) / 1000) * KIDS_FPS))})}
 		/>
 		<Composition
 			id="StylePreview"

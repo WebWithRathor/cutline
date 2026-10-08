@@ -3,6 +3,7 @@
 import {useRouter} from 'next/navigation';
 import {useMemo, useState} from 'react';
 import {StyleEditor} from '@/components/StyleEditor';
+import {extractAudioWav, probeVideo, uploadProjectFile} from '@/lib/client-media';
 import type {CaptionStyleChoice} from '@/remotion/types';
 import type {Field, Variant} from '@/variants';
 import {createProject} from '../actions';
@@ -11,28 +12,7 @@ type ClientVariant = Omit<Variant, 'plannerGuidance'>;
 
 const defaultsOf = (v: ClientVariant) => Object.fromEntries(v.fields.map((f) => [f.name, 'default' in f ? f.default : ''])) as Record<string, string | boolean>;
 
-function uploadFile(projectId: string, file: File, onProgress: (p: number) => void) {
-	return new Promise<void>((resolve, reject) => {
-		const xhr = new XMLHttpRequest();
-		xhr.open('PUT', `/api/projects/${projectId}/source`);
-		xhr.setRequestHeader('x-file-name', encodeURIComponent(file.name));
-		xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
-		xhr.onload = () => {
-			if (xhr.status >= 200 && xhr.status < 300) resolve();
-			else {
-				let msg = 'Upload failed. Try again.';
-				try {
-					msg = JSON.parse(xhr.responseText).error ?? msg;
-				} catch {}
-				reject(new Error(msg));
-			}
-		};
-		xhr.onerror = () => reject(new Error('Upload failed. Check your connection and try again.'));
-		xhr.send(file);
-	});
-}
-
-export function NewProjectForm({variants, disabled}: {variants: ClientVariant[]; disabled: boolean}) {
+export function NewProjectForm({variants, disabled, storage}: {variants: ClientVariant[]; disabled: boolean; storage: 'blob' | 'local'}) {
 	const router = useRouter();
 	const [variantId, setVariantId] = useState(variants[0].id);
 	const variant = useMemo(() => variants.find((v) => v.id === variantId)!, [variants, variantId]);
@@ -41,7 +21,7 @@ export function NewProjectForm({variants, disabled}: {variants: ClientVariant[];
 	const [file, setFile] = useState<File | null>(null);
 	const [title, setTitle] = useState('');
 	const [error, setError] = useState<string | null>(null);
-	const [phase, setPhase] = useState<'idle' | 'creating' | 'uploading'>('idle');
+	const [phase, setPhase] = useState<'idle' | 'reading' | 'creating' | 'uploading' | 'starting'>('idle');
 	const [progress, setProgress] = useState(0);
 
 	function pickVariant(v: ClientVariant) {
@@ -54,16 +34,29 @@ export function NewProjectForm({variants, disabled}: {variants: ClientVariant[];
 		e.preventDefault();
 		setError(null);
 		if (!file) return setError('Choose a video to upload.');
-		setPhase('creating');
-		const res = await createProject({title: title || file.name.replace(/\.[^.]+$/, ''), variantId, brief, style});
-		if (!res.id) {
-			setPhase('idle');
-			return setError(res.error ?? 'Something went wrong.');
-		}
-		setPhase('uploading');
 		try {
-			await uploadFile(res.id, file, setProgress);
-			router.push(`/projects/${res.id}`);
+			setPhase('reading');
+			const info = await probeVideo(file);
+			setPhase('creating');
+			const res = await createProject({title: title || file.name.replace(/\.[^.]+$/, ''), variantId, brief, style});
+			if (!res.id) throw new Error(res.error ?? 'Something went wrong.');
+			const id = res.id;
+			setPhase('uploading');
+			setProgress(0);
+			// audio extraction runs while the video uploads
+			const audioPromise = extractAudioWav(file, info.durationSec);
+			const sourceKey = await uploadProjectFile({projectId: id, file, kind: 'source', fileName: file.name, storage, onProgress: (p) => setProgress(p * 0.95)});
+			const audio = await audioPromise;
+			const audioKey = audio ? await uploadProjectFile({projectId: id, file: audio, kind: 'audio', fileName: 'audio.wav', storage}).catch(() => null) : null;
+			setProgress(1);
+			setPhase('starting');
+			const start = await fetch(`/api/projects/${id}/start`, {
+				method: 'POST',
+				headers: {'Content-Type': 'application/json'},
+				body: JSON.stringify({sourceKey, audioKey, sourceName: file.name, durationSec: info.durationSec, width: info.width, height: info.height}),
+			});
+			if (!start.ok) throw new Error((await start.json().catch(() => ({}))).error ?? 'Could not start the edit.');
+			router.push(`/projects/${id}`);
 		} catch (err) {
 			setPhase('idle');
 			setError(err instanceof Error ? err.message : 'Upload failed.');
@@ -116,7 +109,7 @@ export function NewProjectForm({variants, disabled}: {variants: ClientVariant[];
 							className="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-line bg-surface px-6 py-10 text-center hover:border-ink"
 						>
 							<span className="font-semibold">{file ? file.name : 'Choose a video'}</span>
-							<span className="mt-1 text-sm text-muted">{file ? `${(file.size / 1024 / 1024).toFixed(1)} MB` : 'MP4, MOV, M4V, WebM or MKV, up to 1 GB'}</span>
+							<span className="mt-1 text-sm text-muted">{file ? `${(file.size / 1024 / 1024).toFixed(1)} MB` : 'MP4, MOV, M4V, WebM or MKV, up to 2 GB'}</span>
 							<input
 								id="file"
 								type="file"
@@ -152,16 +145,36 @@ export function NewProjectForm({variants, disabled}: {variants: ClientVariant[];
 				<div className="mt-6 grid gap-5 sm:grid-cols-2">{variant.fields.map(field)}</div>
 			</section>
 
-			<section>
-				<h2 className="h-display text-xl">Caption style</h2>
-				<div className="mt-4">
-					<StyleEditor value={style} onChange={setStyle} />
-				</div>
-			</section>
+			{variant.renderer === 'captioned' ? (
+				<section>
+					<h2 className="h-display text-xl">Caption style</h2>
+					<div className="mt-4">
+						<StyleEditor value={style} onChange={setStyle} />
+					</div>
+				</section>
+			) : (
+				<section className="rounded-xl border border-line bg-surface p-5">
+					<h2 className="h-display text-xl">How {variant.name} works</h2>
+					<ol className="mt-3 list-decimal space-y-1.5 pl-5 text-sm text-muted">
+						<li>Your recording is transcribed. Your voice is never replaced or generated, only cut between takes.</li>
+						<li>Claude picks the best take of each line and plans the cutaways with the cast.</li>
+						<li>You review the takes and the beat plan with a live preview, and approve or ask for changes.</li>
+						<li>The video renders at {variant.output}, with gold keyword captions.</li>
+					</ol>
+				</section>
+			)}
 
 			<div className="sticky bottom-0 -mx-5 flex flex-wrap items-center gap-4 border-t border-line bg-fog/95 px-5 py-4 backdrop-blur sm:-mx-10 sm:px-10">
 				<button className="btn btn-primary px-6" disabled={disabled || busy}>
-					{phase === 'creating' ? 'Creating…' : phase === 'uploading' ? `Uploading ${Math.round(progress * 100)}%` : 'Upload and edit'}
+					{phase === 'reading'
+						? 'Reading video…'
+						: phase === 'creating'
+							? 'Creating…'
+							: phase === 'uploading'
+								? `Uploading ${Math.round(progress * 100)}%`
+								: phase === 'starting'
+									? 'Starting…'
+									: 'Upload and edit'}
 				</button>
 				{error && <p role="alert" className="text-sm text-bad">{error}</p>}
 			</div>

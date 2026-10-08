@@ -11,7 +11,7 @@ const nextConfig: NextConfig = {
 		},
 	},
 	// Rendering/bundling packages run in the worker; keep them out of the server bundle.
-	serverExternalPackages: ['@remotion/bundler', '@remotion/renderer', '@libsql/client'],
+	serverExternalPackages: ['@remotion/bundler', '@remotion/renderer', '@remotion/vercel', '@vercel/sandbox', '@libsql/client'],
 };
 
 export default nextConfig;

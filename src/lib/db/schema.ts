@@ -88,7 +88,7 @@ export const apiKey = sqliteTable(
 	(t) => [uniqueIndex('api_key_user_provider_idx').on(t.userId, t.provider)],
 );
 
-export const PROJECT_STATUSES = ['draft', 'queued', 'transcribing', 'planning', 'rendering', 'done', 'failed'] as const;
+export const PROJECT_STATUSES = ['draft', 'queued', 'transcribing', 'planning', 'review', 'rendering', 'done', 'failed'] as const;
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 
 export const project = sqliteTable(
@@ -107,6 +107,9 @@ export const project = sqliteTable(
 		error: text('error'),
 		sourceKey: text('source_key'),
 		sourceName: text('source_name'),
+		audioKey: text('audio_key'), // 16 kHz mono WAV extracted in the browser, used for transcription
+		renderSandboxId: text('render_sandbox_id'), // Vercel Sandbox render in flight
+		renderCmdId: text('render_cmd_id'),
 		durationSec: real('duration_sec'),
 		width: integer('width'),
 		height: integer('height'),

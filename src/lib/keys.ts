@@ -1,7 +1,7 @@
 import 'server-only';
 import {and, eq} from 'drizzle-orm';
 import {db, schema} from './db';
-import {decrypt} from './crypto';
+import {decrypt} from '@/server/crypto';
 import type {Provider} from './db/schema';
 
 export const PROVIDER_INFO: Record<Provider, {name: string; use: string; placeholder: string; docs: string}> = {

@@ -15,6 +15,13 @@
       "when": 1791414900797,
       "tag": "0001_noisy_white_queen",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1791446864546,
+      "tag": "0002_yielding_metal_master",
+      "breakpoints": true
     }
   ]
 }

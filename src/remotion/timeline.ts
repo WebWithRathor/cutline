@@ -53,3 +53,21 @@ export function mapZooms(zooms: Zoom[] | undefined, segs: Segment[]): Zoom[] {
 		.map((z) => ({...z, atMs: srcToOut(segs, z.atMs) ?? -1}))
 		.filter((z) => z.atMs >= 0);
 }
+
+// Output-time start (ms) of each source word; null when the word was cut.
+export function wordOutTimes(words: Word[], segs: Segment[]): (number | null)[] {
+	return words.map((w) => {
+		const mid = (w.startMs + w.endMs) / 2;
+		const seg = segs.find((s) => mid >= s.srcStartMs && mid <= s.srcEndMs);
+		return seg ? seg.outStartMs + Math.max(seg.srcStartMs, w.startMs) - seg.srcStartMs : null;
+	});
+}
+
+// Time of a source word on the output timeline; a cut word resolves to the next kept word.
+export function atWordMs(outTimes: (number | null)[], index: number): number {
+	const n = outTimes.length;
+	if (!n) return 0;
+	for (let i = Math.max(0, Math.min(n - 1, Math.round(index))); i < n; i++) if (outTimes[i] !== null) return outTimes[i] as number;
+	for (let i = n - 1; i >= 0; i--) if (outTimes[i] !== null) return outTimes[i] as number;
+	return 0;
+}
