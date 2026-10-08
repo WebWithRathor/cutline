@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {and, asc, eq, lt} from 'drizzle-orm';
 import {db, schema} from '@/lib/db';
+import {generateBroll} from '@/server/broll';
 import {getServeUrl, renderComposition} from '@/server/pipeline/render';
 import {renderInput} from '@/server/render';
 import {putFile, removeKey} from '@/server/storage';
@@ -51,6 +52,11 @@ async function claim() {
 }
 
 async function runJob(job: typeof schema.job.$inferSelect) {
+	// the storyboard was approved: first make the HyperFrames / Higgsfield clips it asked for
+	await generateBroll(job.projectId, (done, total) => {
+		log(`b-roll ${done}/${total} for ${job.projectId}`);
+		void setProject(job.projectId, done < total ? {status: 'generating', progress: 0.02 + 0.3 * (done / total)} : {status: 'rendering', progress: 0.04});
+	});
 	const [p] = await db.select().from(schema.project).where(eq(schema.project.id, job.projectId));
 	if (!p) return;
 	const {compositionId, inputProps} = await renderInput(p);

@@ -1,6 +1,8 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import {characterVocabulary} from '@/remotion/kids/scenes';
-import {KIDS_CHARACTERS, KIDS_COLORS, type EditPlan, type KidsCharacter, type KidsColor, type KidsOverlay, type KidsScene, type KidsShot, type Word} from '@/remotion/types';
+import {SFX_META} from '@/remotion/fx/meta';
+import {KIDS_CHARACTERS, KIDS_COLORS, type CreativeBrief, type EditPlan, type KidsCharacter, type KidsColor, type KidsOverlay, type KidsScene, type KidsShot, type Word} from '@/remotion/types';
+import {SFX_SCHEMA, creativeText, sanitizeLook} from './fx';
 import {REMOVE_SCHEMA, SILENCE_MS, callPlanner, numberedTranscript, toPlan, type RawCuts} from './plan';
 
 // The Kit Student planner: best takes + a beat plan built from the kids-edit-kit's ready beats.
@@ -112,8 +114,9 @@ const TOOL: Anthropic.Tool = {
 					required: ['kind', 'startWord', 'why'],
 				},
 			},
+			sfx: {...SFX_SCHEMA, description: 'Playful sound effects on exact kept words: a pop when a character or sticker appears, a whoosh on cutaway wipes, a ding on a right answer. Gentle, one per beat at most.'},
 		},
-		required: ['remove', 'keywords', 'shots'],
+		required: ['remove', 'keywords', 'shots', 'sfx'],
 	},
 };
 
@@ -125,7 +128,7 @@ type RawShot = {
 	overlay?: Record<string, unknown> & {type?: string; atWord?: number; items?: Record<string, unknown>[]};
 	scene?: Record<string, unknown> & {type?: string; actors?: Record<string, unknown>[]};
 };
-type RawKids = RawCuts & {shots: RawShot[]};
+type RawKids = RawCuts & {shots: RawShot[]; sfx?: unknown};
 
 const words5 = (s: unknown) => String(s ?? '').trim().split(/\s+/).slice(0, 5).join(' ');
 const short = (s: unknown, n: number) => String(s ?? '').trim().slice(0, n);
@@ -202,14 +205,14 @@ export function sanitizeShots(raw: RawShot[] | undefined, n: number): KidsShot[]
 	return shots;
 }
 
-export async function planKids(opts: {apiKey: string; words: Word[]; guidance: string; pacing: string; notes?: string; previous?: EditPlan | null}): Promise<EditPlan> {
+export async function planKids(opts: {apiKey: string; words: Word[]; guidance: string; pacing: string; notes?: string; previous?: EditPlan | null; creative?: CreativeBrief | null}): Promise<EditPlan> {
 	if (!opts.words.length) return {keepRanges: [], keywords: [], zooms: [], shots: []};
 	const vocab = characterVocabulary()
 		.map((c) => `${c.character}: moods ${c.moods.join(', ')}${c.arms.length ? `; arms ${c.arms.join(', ')}` : ''}`)
 		.join('\n');
 	const previous =
 		opts.notes && opts.previous
-			? `\n\nYour previous plan (JSON):\n${JSON.stringify({removed: opts.previous.removed, shots: opts.previous.shots})}\n\nThe creator's notes on it (follow them):\n${opts.notes}`
+			? `\n\nYour previous plan (JSON):\n${JSON.stringify({removed: opts.previous.removed, shots: opts.previous.shots, sfx: opts.previous.sfx})}\n\nThe creator's notes on it (follow them):\n${opts.notes}`
 			: opts.notes
 				? `\n\nNotes from the creator:\n${opts.notes}`
 				: '';
@@ -220,9 +223,13 @@ export async function planKids(opts: {apiKey: string; words: Word[]; guidance: s
 		system:
 			'You edit raw talking-head recordings into ~1 minute kid-friendly explainers with the Kokoon cast. ' +
 			'You pick the best take of each line, then plan sticker-style cutaways where the cast acts out each idea.\n' +
-			`Cast:${CAST}\n\nCharacter moods and arm poses you may use:\n${vocab}\n${RECIPE}\n${RULES}`,
-		user: `Editing brief:\n${opts.guidance}${previous}\n\nTranscript (index, start seconds, word):\n${numberedTranscript(opts.words)}`,
+			`Cast:${CAST}\n\nCharacter moods and arm poses you may use:\n${vocab}\n${RECIPE}\n${RULES}\n\nSound effects:\n${Object.entries(SFX_META)
+				.map(([k, v]) => `- ${k}: ${v.description}`)
+				.join('\n')}\n\nA director watched the video and wrote a creative brief. Use its mood, pacing and sound ideas; ignore its caption, grade and B-roll choices (this format has its own).`,
+		user: `Editing brief:\n${opts.guidance}\n\n${creativeText(opts.creative)}${previous}\n\nTranscript (index, start seconds, word):\n${numberedTranscript(opts.words)}`,
 	});
 	const base = toPlan(raw, opts.words, SILENCE_MS[opts.pacing] ?? SILENCE_MS.natural);
-	return {...base, zooms: [], hook: undefined, shots: sanitizeShots(raw.shots, opts.words.length)};
+	const removed = new Set(base.removed?.flatMap((r) => Array.from({length: r.to - r.from + 1}, (_, k) => r.from + k)) ?? []);
+	const {sfx} = sanitizeLook({sfx: raw.sfx}, opts.words, removed, {brollMode: 'none', higgsfield: false});
+	return {...base, zooms: [], hook: undefined, shots: sanitizeShots(raw.shots, opts.words.length), sfx};
 }

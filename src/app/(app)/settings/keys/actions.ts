@@ -22,7 +22,7 @@ export async function saveKey(_prev: KeyFormState, form: FormData): Promise<KeyF
 	if (!parsed.success) return {error: parsed.error.issues[0]?.message ?? 'Invalid key.'};
 	const {provider, key} = parsed.data;
 	if (provider === 'anthropic' && !key.startsWith('sk-ant-')) return {error: 'Anthropic keys start with sk-ant-.'};
-	if (provider === 'openai' && !key.startsWith('sk-')) return {error: 'OpenAI keys start with sk-.'};
+	if (provider === 'higgsfield' && !/^[^:\s]+:[^:\s]+$/.test(key)) return {error: 'Paste the Higgsfield key as KEY_ID:KEY_SECRET.'};
 
 	const values = {ciphertext: encrypt(key), last4: key.slice(-4)};
 	await db
